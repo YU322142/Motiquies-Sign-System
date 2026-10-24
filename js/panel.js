@@ -194,7 +194,9 @@
     var props = itemProps(item);
     var context = App.state && App.state.context;
     if (context && type === 'crt-sign' && global.SignComposition.contextOverrides) {
-      props = Object.assign({}, props, global.SignComposition.contextOverrides(global.SignCRT.get(props.templateId), context, availableRouteLines()));
+      var template = global.SignCRT.get(props.templateId);
+      props = Object.assign({}, props, global.SignComposition.contextOverrides(template, context, routeLinesForContext(context)));
+      if (template.layout === 'route') props.routeLine = global.SignRoutes.forContext(context, routeLinesForContext(context));
     } else if (context && global.SignComposition.contextProps) {
       props = global.SignComposition.contextProps(type, props, context);
     }
@@ -285,7 +287,16 @@
       sections.appendChild(button);
     });
     root.appendChild(sections);
-    var contextLine = h('span', { class: 'project-context-line' });
+    var contextLine = h('select', { class: 'project-context-line', 'aria-label': '当前线路', 'data-context-line': '' });
+    contextLine.addEventListener('change', function () {
+      var entry = lineEntries().find(function (item) { return item.key === contextLine.value; });
+      if (!entry) return;
+      App.update(function (sign) { return State.setProjectContext(sign, {
+        line: entry.line, stationId: entry.line.currentStationId, source: entry.source,
+      }); });
+      setPaletteCity(entry.source === 'server' ? 'server' : 'fictional');
+      refreshBasicPalette(root); refreshCRTCards();
+    });
     var contextStation = h('select', { 'aria-label': '当前车站', 'data-context-station': '' });
     contextStation.addEventListener('change', function () {
       var context = App.state.context;
@@ -296,6 +307,9 @@
     var contextManage = h('button', { class: 'project-context-manage', text: '管理', title: '管理当前线路', 'data-context-manage': '' });
     contextManage.addEventListener('click', function () { openRouteManager(); });
     root.appendChild(h('div', { class: 'project-context-bar' }, [contextLine, contextStation, contextManage]));
+    var replaceBoards = h('button', { class: 'project-context-manage', text: '批量', title: '同时更换其他牌面', 'aria-label': '同时更换其他牌面', 'data-replace-boards': '' });
+    replaceBoards.addEventListener('click', function () { openSignDataPicker(null, true); });
+    root.querySelector('.project-context-bar').appendChild(replaceBoards);
     root.appendChild(h('div', { class: 'palette-section-description' }));
     var routeManager = h('button', { class: 'palette-tab route-manager-tab', text: '线路管理', 'data-route-manager': '' });
     routeManager.addEventListener('click', function () { openRouteManager(); });
@@ -344,13 +358,15 @@
     var bar = root && root.querySelector('.project-context-bar');
     if (!bar) return;
     var context = App.state && App.state.context;
-    bar.hidden = !context;
-    document.body.classList.toggle('has-project-context', !!context);
-    if (!context) return;
-    var line = context.line;
-    var name = bar.querySelector('.project-context-line');
-    name.textContent = line.nameZh || line.nameEn || '当前线路';
-    name.title = '当前线路：' + name.textContent;
+    var entries = lineEntries(context);
+    bar.hidden = !context && !entries.length;
+    document.body.classList.toggle('has-project-context', !bar.hidden);
+    var name = bar.querySelector('[data-context-line]');
+    paintLineOptions(name, entries, context ? contextKey(context) : '', '选择已有线路…');
+    name.title = context ? '当前线路：' + (context.line.nameZh || context.line.nameEn) : '选择线路后再选择车站';
+    var bulk = root.querySelector('[data-replace-boards]');
+    if (bulk) bulk.hidden = !context || !global.SignWorkspace.list(App.state).some(function (board) { return board.sign.rows.some(global.SignContent.canReplace); });
+    var line = context ? context.line : { id: '', stations: [] };
     var stations = bar.querySelector('[data-context-station]');
     var signature = line.id + '|' + line.stations.map(function (station) { return station.id; }).join('|');
     if (stations.dataset.stations !== signature) {
@@ -361,7 +377,7 @@
     line.stations.forEach(function (station, index) {
       stations.options[index].textContent = (station.code ? station.code + ' ' : '') + (station.nameZh || station.nameEn || '未命名车站');
     });
-    if (document.activeElement !== stations) stations.value = context.stationId || '';
+    if (document.activeElement !== stations) stations.value = context && context.stationId || '';
     stations.disabled = !line.stations.length;
   }
 
@@ -521,16 +537,9 @@
       // 先创建再入状态：id 可捕获，供移动端添加后选中
       if (isTemplate) {
         if (!App.state.context) setPaletteCity('chongqing');
-        var template = global.SignCRT.get(item.props.templateId);
-        var overrides = global.SignComposition.contextOverrides && global.SignComposition.contextOverrides(template, App.state.context, availableRouteLines());
-        var fourSided = template.id === 'four-sided-guide' ? State.createFourSided(overrides) : null;
-        if (fourSided) overrides = Object.assign({}, overrides, { fourSidedEntries: fourSided.entries });
-        var elements = global.SignComposition
-          ? global.SignComposition.materialize(item.props.templateId, overrides, App.measure) : [createElementForItem(item)];
-        App.update(function (s) { return addPresetBoard(s, elements,
-          { name: boardNameForTemplate(template), widthRatio: fourSided ? fourSided.referenceRowRatio / fourSided.entries.length : template.width / template.height,
-            templateId: template.id, backgroundColor: overrides && overrides.backgroundColor,
-            fourSided: fourSided || undefined }); });
+        var result = buildTemplateContent(item.props.templateId);
+        var elements = result.elements;
+        App.update(function (s) { return addPresetBoard(s, elements, result.options); });
         selectAddedElements(elements);
       } else {
         var created = createElementForItem(item);
@@ -668,6 +677,7 @@
   var serverCatalogListeners = [];
 
   function notifyServerLines() {
+    syncContextBar();
     refreshLinePalettes(true);
     serverCatalogListeners.slice().forEach(function (listener) { listener(); });
   }
@@ -698,6 +708,52 @@
       byId[line.id] = line;
     });
     return order.map(function (id) { return byId[id]; });
+  }
+
+  function contextKey(context) { return (context.source === 'server' ? 'server:' : 'local:') + context.line.id; }
+
+  function lineEntries(context) {
+    var entries = (global.SignRoutes ? global.SignRoutes.list() : []).map(function (line) {
+      return { key: 'local:' + line.id, source: 'local', line: line };
+    }).concat(serverCatalog.lines.map(function (line) { return { key: 'server:' + line.id, source: 'server', line: line }; }));
+    context = context || App.state && App.state.context;
+    if (context && !entries.some(function (entry) { return entry.key === contextKey(context); })) {
+      entries.push({ key: contextKey(context), source: context.source === 'server' ? 'server' : 'local', line: context.line });
+    }
+    return entries;
+  }
+
+  function paintLineOptions(select, entries, selected, placeholder) {
+    var signature = JSON.stringify(entries.map(function (entry) { return entry.key; }));
+    if (select.dataset.lineKeys !== signature) {
+      select.replaceChildren(h('option', { value: '', text: placeholder || '选择已有线路…' }));
+      [['local', '我的线路 / 项目线路'], ['server', '服务器线路']].forEach(function (source) {
+        var items = entries.filter(function (entry) { return entry.source === source[0]; });
+        if (!items.length) return;
+        var group = h('optgroup', { label: source[1] });
+        items.forEach(function (entry) { group.appendChild(h('option', { value: entry.key })); });
+        select.appendChild(group);
+      });
+      select.dataset.lineKeys = signature;
+    }
+    entries.forEach(function (entry) {
+      var option = Array.from(select.options).find(function (option) { return option.value === entry.key; });
+      option.textContent = entry.line.nameZh || entry.line.nameEn || '未命名线路';
+    });
+    if (document.activeElement !== select) select.value = selected;
+  }
+
+  function routeLinesForContext(context) {
+    var local = global.SignRoutes ? global.SignRoutes.list() : [];
+    var sources = context && context.source === 'server' ? local.concat(serverCatalog.lines) : serverCatalog.lines.concat(local);
+    return mergeRouteLines((context && context.line.relatedLines || []).concat(sources, context ? [context.line] : []));
+  }
+
+  function buildTemplateContent(templateId, context) {
+    context = context === undefined ? App.state.context : context;
+    var result = global.SignContent.build(templateId, context, routeLinesForContext(context), App.measure);
+    result.options.name = boardNameForTemplate(global.SignCRT.get(templateId));
+    return result;
   }
 
   function availableRouteLines() {
@@ -1442,10 +1498,179 @@
     paint(); close.focus();
   }
 
+  function buildSignDataEntryPoint(rowId) {
+    var root = h('div', { class: 'sign-data-entry' });
+    var summary = h('div', { class: 'hint-text', 'data-sign-data-summary': '' });
+    var button = h('button', { class: 'btn', text: '从已有线路选择车站', 'data-sign-data-edit': '' });
+    function currentRow() { return App.state.rows.find(function (row) { return rowId ? row.id === rowId : global.SignContent.canReplace(row); }); }
+    function paint() {
+      var row = currentRow();
+      root.hidden = !global.SignContent.canReplace(row);
+      var context = row && (row.stationContext || row.route && { line: row.route.line, stationId: row.route.line.currentStationId });
+      var station = context && context.line.stations.find(function (item) { return item.id === context.stationId; });
+      summary.textContent = context ? (context.line.nameZh || context.line.nameEn) + ' · ' +
+        (station ? (station.code ? station.code + ' ' : '') + (station.nameZh || station.nameEn) : '未选择车站') : '可选用已保存的线路与站点';
+    }
+    button.addEventListener('click', function () { var row = currentRow(); if (row) openSignDataPicker(row.id); });
+    root.appendChild(summary); root.appendChild(button); paint(); syncFns.push(paint); return root;
+  }
+
+  function openSignDataPicker(rowId, allBoards) {
+    var Content = global.SignContent, Routes = global.SignRoutes, Workspace = global.SignWorkspace;
+    var row = App.state.rows.find(function (item) { return item.id === rowId; });
+    var initial = row && (row.stationContext || row.route && {
+      line: row.route.line, stationId: row.route.line.currentStationId, source: row.route.source,
+    }) || App.state.context;
+    var entries = lineEntries(initial);
+    if (!initial && entries.length) initial = { line: entries[0].line, stationId: entries[0].line.currentStationId, source: entries[0].source };
+    var draft = initial ? Core.deepClone(initial) : null, finished = false, composing = false;
+    if (draft) {
+      var latest = entries.find(function (entry) { return entry.key === contextKey(draft); });
+      if (latest) {
+        draft.line = Routes.normalizeLine(latest.line);
+        if (!draft.line.stations.some(function (station) { return station.id === draft.stationId; })) draft.stationId = draft.line.currentStationId || draft.line.stations[0] && draft.line.stations[0].id;
+      }
+    }
+    var boards = Workspace.list(App.state), currentBoard = boards.find(function (board) { return board.active; });
+    var targets = boards.filter(function (board) { return board.sign.rows.some(Content.canReplace); });
+    var previousFocus = document.activeElement;
+    var mask = h('div', { class: 'modal-mask sign-data-mask' });
+    var modal = h('div', { class: 'modal sign-data-modal', role: 'dialog', 'aria-modal': 'true', 'aria-labelledby': 'sign-data-title' });
+    var close = h('button', { class: 'icon-btn', text: '✕', 'aria-label': '关闭车站选择' });
+    modal.appendChild(h('div', { class: 'route-modal-header' }, [h('h3', { id: 'sign-data-title', text: '选用线路与车站' }), close]));
+    var lineSelect = h('select', { 'aria-label': '标识使用的线路', 'data-sign-data-line': '' });
+    paintLineOptions(lineSelect, entries, draft ? contextKey(draft) : '');
+    var stationSelect = h('select', { 'aria-label': '标识使用的车站', 'data-sign-data-station': '' });
+    var direction = h('select', { 'aria-label': '标识运行方向', 'data-sign-data-direction': '' }, [
+      h('option', { value: 'forward', text: '正向：首站 → 末站' }), h('option', { value: 'backward', text: '反向：末站 → 首站' }),
+    ]);
+    var body = h('div', { class: 'sign-data-body' });
+    body.appendChild(h('div', { class: 'sign-data-fields' }, [field('线路', lineSelect), field('车站', stationSelect), field('运行方向', direction)]));
+    var transfers = h('div', { class: 'sign-data-transfers', 'data-sign-data-transfers': '' }); body.appendChild(transfers);
+    var bulk = h('input', { type: 'checkbox', checked: allBoards ? 'checked' : null, 'data-sign-data-bulk': '' });
+    body.appendChild(h('label', { class: 'sign-data-bulk-label' }, [bulk, h('span', { text: '同时更换其他牌面' })]));
+    var boardList = h('div', { class: 'sign-data-boards', 'aria-label': '参与更换的牌面' });
+    targets.forEach(function (board) {
+      var check = h('input', { type: 'checkbox', checked: allBoards || board.active ? 'checked' : null, 'data-sign-data-board': board.id });
+      boardList.appendChild(h('label', { class: 'sign-data-choice' }, [check, h('span', { text: board.name + (board.active ? '（当前）' : '') })]));
+    });
+    body.appendChild(boardList);
+    body.appendChild(h('div', { class: 'hint-text', text: '应用时按原预设重新生成所选标识的图文，保留牌型与手调比例。已手动修改的文字和位置会重新排版；左侧当前车站保持不变。' }));
+    var message = h('div', { class: 'sign-data-status', role: 'status' }); body.appendChild(message);
+    var manage = h('button', { class: 'btn', text: '管理线路与站点' });
+    var cancel = h('button', { class: 'btn', text: '取消' });
+    var apply = h('button', { class: 'btn btn-primary', text: '应用到当前标识', 'data-sign-data-apply': '' });
+    modal.appendChild(body); modal.appendChild(h('div', { class: 'sign-data-actions' }, [manage, cancel, apply]));
+    mask.appendChild(modal); document.getElementById('modal-root').appendChild(mask);
+
+    function isTransfer() {
+      return row && /transfer|interchange/.test(row.templateId || '') || bulk.checked && targets.some(function (board) {
+        return board.sign.rows.some(function (item) { return /transfer|interchange/.test(item.templateId || ''); });
+      });
+    }
+    function transferChoices() { return draft ? routeLinesForContext(draft).filter(function (line) { return line.id !== draft.line.id; }) : []; }
+    function paintTransfers() {
+      transfers.replaceChildren(); transfers.hidden = !draft || !isTransfer();
+      if (transfers.hidden) return;
+      transfers.appendChild(h('div', { class: 'section-title', text: '换乘到哪些线路' }));
+      var station = draft.line.stations.find(function (item) { return item.id === draft.stationId; });
+      var choices = transferChoices(), knownIds = [];
+      (station && station.transfers || '').split(/[\/、,，;；\r\n|]+/).forEach(function (token) {
+        var hit = Routes.colorFor(token, choices);
+        if (hit && knownIds.indexOf(hit.id) === -1) knownIds.push(hit.id);
+      });
+      var selectedIds = Array.isArray(draft.transferLineIds) ? draft.transferLineIds : knownIds;
+      choices.forEach(function (line) {
+        var check = h('input', { type: 'checkbox', 'data-sign-data-transfer': line.id }); check.checked = selectedIds.indexOf(line.id) !== -1;
+        var swatch = h('span', { class: 'sign-data-swatch' }); swatch.style.backgroundColor = line.color;
+        check.addEventListener('change', function () {
+          draft.transferLineIds = Array.from(transfers.querySelectorAll('input:checked')).map(function (input) { return input.dataset.signDataTransfer; });
+        });
+        transfers.appendChild(h('label', { class: 'sign-data-choice' }, [check, swatch, h('span', { text: line.nameZh || line.nameEn })]));
+      });
+      transfers.appendChild(h('div', { class: 'hint-text', text: !choices.length ? '尚无其他已定义线路，可在线路管理中添加。' :
+        '可增减换乘线路，各线使用自己的主题色。此次选择只应用到所选牌面。' }));
+    }
+    function paintStations() {
+      stationSelect.replaceChildren();
+      if (draft) draft.line.stations.forEach(function (station) {
+        stationSelect.appendChild(h('option', { value: station.id, text: (station.code ? station.code + ' ' : '') +
+          (station.nameZh || station.nameEn || '未命名车站') + (station.nameEn ? ' · ' + station.nameEn : '') }));
+      });
+      stationSelect.value = draft && draft.stationId || ''; stationSelect.disabled = !draft || !draft.line.stations.length;
+      direction.value = draft ? draft.line.direction : 'forward';
+      message.textContent = !draft ? '先在线路管理中创建线路，或选择服务器线路。' : !draft.line.stations.length ? '这条线路还没有站点，请先添加站点。' : '';
+      paintTransfers(); paintScope();
+    }
+    function paintScope() {
+      boardList.hidden = !bulk.checked;
+      var count = bulk.checked ? boardList.querySelectorAll('input:checked').length : row ? 1 : 0;
+      apply.textContent = bulk.checked ? '更换选中的 ' + count + ' 块牌面' : '应用到当前标识';
+      apply.disabled = !draft || !draft.line.stations.length || !count;
+    }
+    lineSelect.addEventListener('change', function () {
+      var entry = entries.find(function (item) { return item.key === lineSelect.value; });
+      draft = entry ? { line: Routes.normalizeLine(entry.line), stationId: entry.line.currentStationId || entry.line.stations[0] && entry.line.stations[0].id, source: entry.source } : null;
+      paintStations();
+    });
+    stationSelect.addEventListener('change', function () { draft.stationId = stationSelect.value; delete draft.transferLineIds; paintTransfers(); });
+    direction.addEventListener('change', function () { draft.line = Routes.patchLine(draft.line, { direction: direction.value }); });
+    bulk.addEventListener('change', function () {
+      if (bulk.checked) boardList.querySelectorAll('input').forEach(function (input) { input.checked = true; });
+      paintTransfers(); paintScope();
+    });
+    boardList.addEventListener('change', paintScope);
+    apply.addEventListener('click', function () {
+      if (apply.disabled) return;
+      if (isTransfer() && !transfers.hidden) {
+        var selected = Array.from(transfers.querySelectorAll('input:checked')).map(function (input) { return input.dataset.signDataTransfer; });
+        if (selected.length || Array.isArray(draft.transferLineIds)) draft.transferLineIds = selected;
+      }
+      var lines = routeLinesForContext(draft), selectedBoards = bulk.checked ? Array.from(boardList.querySelectorAll('input:checked')).map(function (input) { return input.dataset.signDataBoard; }) : [currentBoard.id];
+      try {
+        App.update(function (sign) {
+          return bulk.checked ? Content.replaceBoards(sign, selectedBoards, draft, lines, App.measure)
+            : Content.replaceRow(sign, rowId, draft, lines, App.measure);
+        });
+        var replacedRows = bulk.checked ? boards.filter(function (board) { return selectedBoards.indexOf(board.id) !== -1; })
+          .reduce(function (ids, board) { return ids.concat(board.sign.rows.filter(Content.canReplace).map(function (item) { return item.id; })); }, []) : [rowId];
+        forgetRouteDrafts(replacedRows);
+        var updated = App.state.rows.find(function (item) { return item.id === rowId; }) || App.state.rows.find(Content.canReplace);
+        if (updated) selectAddedElements(updated.elements);
+        finish(); SignUI.toast(bulk.checked ? '已更换 ' + selectedBoards.length + ' 块牌面' : '已使用选定车站重新生成标识', 'success');
+      } catch (error) { message.textContent = error.message || '无法应用车站资料'; }
+    });
+    function syncPickerSources() {
+      if (finished) return;
+      entries = lineEntries(draft); paintLineOptions(lineSelect, entries, draft ? contextKey(draft) : '');
+    }
+    serverCatalogListeners.push(syncPickerSources);
+    function finish() {
+      if (finished) return; finished = true;
+      serverCatalogListeners = serverCatalogListeners.filter(function (listener) { return listener !== syncPickerSources; });
+      mask.remove(); if (previousFocus && previousFocus.isConnected) previousFocus.focus();
+    }
+    close.addEventListener('click', finish); cancel.addEventListener('click', finish);
+    manage.addEventListener('click', function () { finish(); openRouteManager(); });
+    modal.addEventListener('compositionstart', function () { composing = true; });
+    modal.addEventListener('compositionend', function () { composing = false; });
+    modal.addEventListener('keydown', function (event) {
+      if (event.defaultPrevented || composing || event.isComposing || event.keyCode === 229) return;
+      if (event.key === 'Escape') { event.preventDefault(); finish(); }
+      if (event.key === 'Tab') {
+        var controls = Array.from(modal.querySelectorAll('button,input,select')).filter(function (node) { return !node.disabled && node.getClientRects().length; });
+        if (event.shiftKey && document.activeElement === controls[0]) { event.preventDefault(); controls[controls.length - 1].focus(); }
+        else if (!event.shiftKey && document.activeElement === controls[controls.length - 1]) { event.preventDefault(); controls[0].focus(); }
+      }
+    });
+    paintStations(); lineSelect.focus();
+  }
+
   function buildSettingsPanel() {
     var s = App.state;
     var root = h('div');
 
+    root.appendChild(buildSignDataEntryPoint());
     root.appendChild(buildFourSidedEntryPoint());
 
     var rowHeightInput = numberInput({ min: '32', max: '2048', step: '4' }, function (v) {
@@ -1610,6 +1835,7 @@
 
     var root = h('div');
     root.appendChild(h('div', { class: 'section-title', text: TYPE_NAMES[el.type] }));
+    root.appendChild(buildSignDataEntryPoint(found.rowId));
     var sizing = buildRowAspectEditor(function () { return el.id; });
     var output = sizing.querySelector('.aspect-output-card');
     if (output) output.remove();
@@ -1796,17 +2022,24 @@
   var rememberedRouteDirty = Object.create(null);
   var rememberedRouteOrigin = 'local';
   function routeDraftKey(origin, id) { return origin + ':' + id; }
+  function forgetRouteDrafts(rowIds) {
+    Object.keys(rememberedRouteDrafts).forEach(function (key) {
+      if (!rowIds.some(function (rowId) { return key.endsWith(':row:' + rowId); })) return;
+      delete rememberedRouteDrafts[key]; delete rememberedRouteDirty[key];
+    });
+  }
 
   function openRouteManager(rowId) {
     var Routes = global.SignRoutes;
     if (!Routes) { SignUI.toast('线路管理尚未就绪，请刷新后重试', 'error'); return; }
     var editingRow = App.state.rows.filter(function (row) { return row.id === rowId; })[0];
     var source = editingRow && editingRow.route;
-    var initialLine = source ? source.line : App.state.context && App.state.context.line || rememberedRouteDraft || Routes.createLine();
+    var initialLine = source ? source.line : App.state.context && Routes.forContext(App.state.context, routeLinesForContext(App.state.context)) || rememberedRouteDraft || Routes.createLine();
     var draftOrigin = source ? source.source === 'server' ? 'server' : 'local'
       : App.state.context ? App.state.context.source === 'server' ? 'server' : 'local' : rememberedRouteOrigin;
-    var initialKey = routeDraftKey(draftOrigin, initialLine.id);
-    var draft = Routes.normalizeLine(rememberedRouteDrafts[initialKey] || initialLine);
+    function scopedDraftKey(origin, id) { return routeDraftKey(origin, id) + (rowId ? ':row:' + rowId : ':manager'); }
+    var initialKey = scopedDraftKey(draftOrigin, initialLine.id);
+    var draft = Routes.normalizeLine(rememberedRouteDirty[initialKey] && rememberedRouteDrafts[initialKey] || initialLine);
     var sourceDrafts = {}, draftDirty = !!rememberedRouteDirty[initialKey];
     var orientation = source && source.orientation || 'horizontal';
     var applyRowId = editingRow ? editingRow.id : null;
@@ -1870,8 +2103,8 @@
     function rememberDraft() {
       rememberedRouteDraft = Routes.normalizeLine(draft);
       rememberedRouteOrigin = draftOrigin;
-      rememberedRouteDrafts[routeDraftKey(draftOrigin, draft.id)] = rememberedRouteDraft;
-      rememberedRouteDirty[routeDraftKey(draftOrigin, draft.id)] = draftDirty;
+      rememberedRouteDrafts[scopedDraftKey(draftOrigin, draft.id)] = rememberedRouteDraft;
+      rememberedRouteDirty[scopedDraftKey(draftOrigin, draft.id)] = draftDirty;
       sourceDrafts[draftOrigin] = rememberedRouteDraft;
     }
     function message(text, error) { status.textContent = text; status.classList.toggle('error', !!error); }
@@ -1903,12 +2136,23 @@
             '。修改仅保存在个人草稿，公共列表由管理员上传更新。';
       }
     }
+    function routeContent() {
+      var template = editingRow && editingRow.templateId && global.SignCRT.get(editingRow.templateId);
+      if (template && template.layout === 'route' && orientation === source.orientation) {
+        var context = { line: draft, stationId: draft.currentStationId, source: draftOrigin };
+        return global.SignContent.build(template.id, context, routeLinesForContext(context), App.measure);
+      }
+      var result = Routes.materialize(draft, orientation, App.measure);
+      return { elements: result.elements, options: { widthRatio: result.widthRatio,
+        route: Object.assign({}, result.route, { source: draftOrigin }),
+        stationContext: { line: draft, stationId: draft.currentStationId, source: draftOrigin } } };
+    }
     function drawPreview() {
       previewTimer = null;
       try {
-        var result = Routes.materialize(draft, orientation, App.measure);
+        var result = routeContent();
         preview.innerHTML = '';
-        preview.appendChild(renderRowThumb(result.elements, 240, { widthRatio: result.widthRatio }));
+        preview.appendChild(renderRowThumb(result.elements, 240, result.options));
       } catch (error) { preview.textContent = error.message; }
     }
     function changed() {
@@ -1989,8 +2233,8 @@
       rememberDraft();
       var origin = routeSource.value, lines = origin === 'server' ? serverCatalog.lines : Routes.list();
       var resume = sourceDrafts[origin], chosen = resume || lines[0];
-      var dirty = resume && rememberedRouteDirty[routeDraftKey(origin, resume.id)];
-      if (chosen) { applyRowId = null; loadDraft(chosen, origin, dirty); }
+      var dirty = resume && rememberedRouteDirty[scopedDraftKey(origin, resume.id)];
+      if (chosen) { if (!editingRow) applyRowId = null; loadDraft(chosen, origin, dirty); }
       else refreshLibrary();
       if (origin === 'server' && !serverCatalog.loaded && !serverCatalog.loading) refreshServerLines();
       message(origin === 'server' ? '选择服务器线路使用；修改和另存不会更新公共列表。' : '已切换到我的线路。');
@@ -2008,7 +2252,7 @@
     library.addEventListener('change', function () {
       var origin = routeSource.value;
       var line = (origin === 'server' ? serverCatalog.lines : Routes.list()).filter(function (item) { return item.id === library.value; })[0];
-      if (line) { applyRowId = null; loadDraft(line, origin); message(origin === 'server' ? '已载入服务器线路的个人草稿。' : '已载入本地线路。'); }
+      if (line) { if (!editingRow) applyRowId = null; loadDraft(line, origin); message(origin === 'server' ? '已载入服务器线路的个人草稿。' : '已载入本地线路。'); }
     });
     function saveDraft() {
       if (Routes.withRelatedLines) draft = Routes.withRelatedLines(draft, draftOrigin === 'server' ? serverCatalog.lines : localRouteLines());
@@ -2081,13 +2325,17 @@
     apply.addEventListener('click', function () {
       try {
         prepareForUse();
-        var result = Routes.materialize(draft, orientation, App.measure);
+        var result = routeContent();
         var selected = App.selection.elementId && State.findElement(App.state, App.selection.elementId);
         App.update(function (sign) {
-          var options = { name: (draft.nameZh || draft.nameEn || '线路') + ' · 线路图', widthRatio: result.widthRatio,
-            route: Object.assign({}, result.route, { source: draftOrigin }), replaceRowId: applyRowId || undefined };
-          return applyRowId ? State.addTemplateRow(sign, selected ? selected.rowId : null, result.elements, options)
+          var options = Object.assign({}, result.options, { name: (draft.nameZh || draft.nameEn || '线路') + ' · 线路图', replaceRowId: applyRowId || undefined });
+          var next = applyRowId ? State.addTemplateRow(sign, selected ? selected.rowId : null, result.elements, options)
             : addPresetBoard(sign, result.elements, options);
+          var current = sign.rows.find(function (row) { return row.id === applyRowId; });
+          if (current && current.referenceWidthRatio && current.widthRatio !== current.referenceWidthRatio) {
+            next = State.setRowAspectRatio(next, current.id, result.options.widthRatio * current.widthRatio / current.referenceWidthRatio);
+          }
+          return current ? Object.assign({}, next, { widthMode: sign.widthMode }) : next;
         });
         selectAddedElements(result.elements); finish(); SignUI.toast('线路图已放入牌面，可继续单独编辑图文', 'success');
       } catch (error) { message(error.message, true); }
@@ -2157,9 +2405,20 @@
   }
 
   function buildPlainTextFields(root, el, live) {
-    var text = textInput({ value: live().props.text, 'aria-label': '文字内容' }, function (value) { patchProps(el.id, { text: value }); });
+    var text = textInput({ value: live().props.text, 'aria-label': '文字内容', 'data-plain-text-content': '' }, function (value) { patchProps(el.id, { text: value }); });
     bindSync(text, function () { return live().props.text; });
     root.appendChild(field('文字内容', text));
+    root.appendChild(field('排列方向', segGroup([
+      { value: 'horizontal', label: '横排' }, { value: 'vertical', label: '竖排' },
+    ], function () { return live().props.writingMode || 'horizontal'; }, function (value) { patchProps(el.id, { writingMode: value }); })));
+    var spacing = numberInput({ min: '0', max: '4', step: '0.05', 'aria-label': '竖排字间距', 'data-vertical-spacing': '' }, function (value) {
+      patchProps(el.id, { letterSpacingRatio: Core.clamp(value, 0, 4) });
+    });
+    spacing.value = live().props.letterSpacingRatio;
+    bindSync(spacing, function () { return live().props.letterSpacingRatio; });
+    var spacingField = field('竖排字间距', spacing, '相对字号的间距，整段文字会自动适配位置框。');
+    function paintSpacing() { spacingField.hidden = live().props.writingMode !== 'vertical'; }
+    paintSpacing(); syncFns.push(paintSpacing); root.appendChild(spacingField);
     root.appendChild(field('字体', segGroup([
       { value: 'zh', label: '中文' }, { value: 'en', label: '英文' }, { value: 'num', label: '数字' },
     ], function () { return live().props.font; }, function (value) { patchProps(el.id, { font: value }); })));
@@ -2639,5 +2898,6 @@
     serverLineSnapshot: function () { return Core.deepClone({ lines: serverCatalog.lines, updatedAt: serverCatalog.updatedAt,
       loading: serverCatalog.loading, loaded: serverCatalog.loaded, error: serverCatalog.error, warnings: serverCatalog.warnings }); },
     routeLinesSnapshot: function () { return Core.deepClone(availableRouteLines()); },
+    buildTemplateContent: buildTemplateContent,
   };
 })(typeof window !== 'undefined' ? window : globalThis);

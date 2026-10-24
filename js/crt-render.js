@@ -34,7 +34,7 @@
     var ink = props.textColor || template.color || '#000000';
     var bg = props.backgroundColor || template.background || '#FFFFFF';
     var accent = global.SignComposition.primaryColor(template, props);
-    if (template.id === 'platform-direction-split') {
+    if (template.id === 'platform-direction-split' || template.id === 'platform-direction-single') {
       bg = props.backgroundColor || accent;
       ink = props.textColor || Core.contrastTextColor(bg);
     }
@@ -137,6 +137,16 @@
         bottom = Math.max(bottom, run.y + descent);
       });
       fittedFragment(fragment, box, alignment, { x: left, y: top, w: right - left, h: bottom - top });
+    }
+    /** A complete upright column remains one selectable text element after materializing. */
+    function verticalText(content, box, size, color, bold) {
+      if (!content || box.w <= 0 || box.h <= 0) return;
+      var fragment = global.SignRender.measureFragment('plain-text', {
+        text: content, font: 'zh', bold: !!bold, writingMode: 'vertical', letterSpacingRatio: 0.15,
+        fontSizeRatio: size / box.h, color: color || ink,
+        padding: { top: 0, right: 0, bottom: 0, left: 0 }, paddingAuto: false,
+      }, box.h, measure);
+      fittedFragment(fragment, box, 'center', { x: 0, y: 0, w: fragment.width, h: fragment.metrics.inkHeight });
     }
     function wrap(input, maxWidth, size, family, weight) {
       var result = [];
@@ -384,7 +394,7 @@
         }
         return;
       }
-      if (/direction-split/.test(kind)) {
+      if (/direction-(?:split|single)/.test(kind)) {
         // 正文图4.1.10-1与-2是两种布局，不共用中央线路徽块。
         // 字号以pt换算；320为图-1内容高度，图-2仅沿用编辑参考高度。
         var mm = Math.min(h / 320, w / 1800);
@@ -413,15 +423,16 @@
             yy += hh + gap * scale;
           });
         }
-        if (template.id === 'platform-direction-split') {
-          var centerW = 400 * mm, sideW = (w - centerW) / 2;
+        if (template.id === 'platform-direction-split' || template.id === 'platform-direction-single') {
+          var singleDirection = template.id === 'platform-direction-single';
+          var centerW = 400 * mm, sideW = (w - centerW) / (singleDirection ? 1 : 2);
           var edge = 80 * mm, arrowW = 200 * mm, gap = 60 * mm;
           arrow({ x: edge, y: (h - arrowW) / 2, w: arrowW, h: arrowW }, 'left', ink);
-          arrow({ x: w - edge - arrowW, y: (h - arrowW) / 2, w: arrowW, h: arrowW }, 'right', ink);
+          if (!singleDirection) arrow({ x: w - edge - arrowW, y: (h - arrowW) / 2, w: arrowW, h: arrowW }, 'right', ink);
           var directionX = edge + arrowW + gap;
           var directionW = sideW - directionX - gap;
           directionStack(leftZh, leftEn, { x: directionX, y: 0, w: directionW, h: h }, 280, 175, ink, 'left');
-          directionStack(rightZh, rightEn, { x: sideW + centerW + gap, y: 0, w: directionW, h: h }, 280, 175, ink, 'right');
+          if (!singleDirection) directionStack(rightZh, rightEn, { x: sideW + centerW + gap, y: 0, w: directionW, h: h }, 280, 175, ink, 'right');
           rect(sideW, 0, centerW, h, '#FFFFFF');
           var lineLabel = value(fields, 'line', code);
           text(lineLabel, { x: sideW + 35 * mm, y: 0, w: centerW - 70 * mm, h: h },
@@ -558,13 +569,9 @@
         if (value(fields, 'line') && !/station-name-vertical|station-vertical/.test(kind)) {
           lineBadge(value(fields, 'line'), margin, top, w * 0.35, w - 2 * margin); top += w * 0.43;
         }
-        var zh = Array.from(title);
         var zhH = Math.max(0, h - top - margin - w * 0.6);
-        var step = Math.min(w * 0.7, zhH / Math.max(zh.length, 1));
-        zh.forEach(function (character, index) {
-          text(character, { x: margin, y: top + index * step, w: w - 2 * margin, h: step },
-            w * 0.68, ink, font, 700, 'center');
-        });
+        var step = Math.min(w * 0.7, zhH / Math.max(Array.from(title).length, 1));
+        verticalText(title, { x: margin, y: top, w: w - 2 * margin, h: step * Array.from(title).length }, w * 0.68, ink, true);
         text(subtitle, { x: margin, y: top + zhH, w: w - 2 * margin, h: w * 0.4 }, w * 0.18, ink, Core.FONT_EN, 400, 'center');
         return;
       }
@@ -606,12 +613,9 @@
       if (/security-portrait/.test(kind)) {
         var securityIcon = w * 0.8;
         symbol(iconId, { x: (w - securityIcon) / 2, y: h * 0.05, w: securityIcon, h: securityIcon }, ink);
-        var securityChars = Array.from(title);
-        var securityStep = Math.min(w * 0.74, h * 0.57 / Math.max(securityChars.length, 1));
-        securityChars.forEach(function (ch, index) {
-          text(ch, { x: margin, y: h * 0.32 + index * securityStep, w: w - 2 * margin, h: securityStep },
-            w * 0.55, ink, font, 700, 'center');
-        });
+        var securityCount = Array.from(title).length;
+        var securityStep = Math.min(w * 0.74, h * 0.57 / Math.max(securityCount, 1));
+        verticalText(title, { x: margin, y: h * 0.32, w: w - 2 * margin, h: securityStep * securityCount }, w * 0.55, ink, true);
         text(subtitle, { x: margin, y: h * 0.92, w: w - 2 * margin, h: h * 0.045 }, w * 0.12, ink, Core.FONT_EN, 400, 'center');
         return;
       }
@@ -876,20 +880,56 @@
     }
 
     function route() {
-      var stations = stationRows(value(fields, 'stations', body));
+      var routes = global.SignRoutes;
+      var routeLine = props.routeLine && routes ? routes.withRelatedLines(props.routeLine, props.linePalette) : null;
+      var stations = routeLine ? routeLine.stations.map(function (station) {
+        return { id: station.id, zh: station.nameZh, en: station.nameEn, code: station.code, transfers: station.transfers };
+      }) : stationRows(value(fields, 'stations', body));
       var isHorizontal = w > h * 1.8;
       var isDouble = /double|two-way|bidirectional|双向/.test(kind);
-      var selected = parseInt(value(fields, 'current'), 10) - 1;
-      if (!Number.isFinite(selected)) {
+      var selected = routeLine ? stations.findIndex(function (station) { return station.id === routeLine.currentStationId; }) : parseInt(value(fields, 'current'), 10) - 1;
+      if (!routeLine && !Number.isFinite(selected)) {
         selected = stations.findIndex(function (station) { return station.zh === title; });
         if (selected < 0) selected = Math.floor(stations.length / 2);
       }
-      if (!stations.length) stations = [{ zh: title, en: subtitle, code: code }];
-      selected = Core.clamp(selected, 0, stations.length - 1);
+      if (!routeLine) {
+        if (!stations.length) stations = [{ zh: title, en: subtitle, code: code }];
+        selected = Core.clamp(selected, 0, stations.length - 1);
+      }
       currentStationIndex = selected;
-      var routeLine = value(fields, 'line'), routeLineEn = value(fields, 'lineEn');
-      var routeTitle = routeLine ? routeLine + (/^\d+$/.test(routeLine) ? '号线 ' : '线 ') + title : title;
-      var routeSubtitle = routeLineEn ? routeLineEn + ' · ' + subtitle : subtitle;
+      var lineLabel = value(fields, 'line'), lineEn = value(fields, 'lineEn');
+      var routeTitle = lineLabel ? lineLabel + (/^\d+$/.test(lineLabel) ? '号线 ' : '线 ') + title : title;
+      var routeSubtitle = lineEn ? lineEn + ' · ' + subtitle : subtitle;
+      var routeDirection = direction;
+      if (routeLine) {
+        accent = routeLine.color;
+        var current = selected >= 0 ? stations[selected] : null;
+        routeTitle = routeLine.nameZh + (current && current.zh ? ' ' + current.zh : '');
+        routeSubtitle = routeLine.nameEn + (current && current.en ? ' · ' + current.en : '');
+        routeDirection = isHorizontal ? (routeLine.direction === 'backward' ? 'left' : 'right') :
+          (routeLine.direction === 'backward' ? 'up' : 'down');
+      }
+      function transferLabels(station, box, size, align) {
+        if (!station.transfers) return;
+        var tokens = station.transfers.split(/[\/、,，;；\r\n|]+/).map(function (label) { return label.trim(); }).filter(Boolean);
+        var widths = tokens.map(function (label) { return textInk(label, font, 400, size).width; });
+        var gap = size * 0.6;
+        var total = widths.reduce(function (sum, width) { return sum + width; }, 0) + Math.max(0, tokens.length - 1) * gap;
+        var scale = Math.min(1, box.w / Math.max(total, 0.001));
+        var x = box.x + (align === 'center' ? (box.w - total * scale) / 2 : align === 'right' ? box.w - total * scale : 0);
+        tokens.forEach(function (label, index) {
+          var match = routes.colorFor(label, routeLine.relatedLines || [], routeLine);
+          text(label, { x: x, y: box.y, w: widths[index] * scale, h: box.h }, size * scale,
+            match ? match.bg : '#66727B', font, 400, 'center');
+          x += (widths[index] + gap) * scale;
+        });
+      }
+      if (!stations.length) {
+        bilingual(routeTitle, routeSubtitle, { x: margin, y: margin, w: w - 2 * margin, h: h * 0.2 },
+          unit * 0.12, ink, 'center', false);
+        text('请添加站点', { x: margin, y: h * 0.4, w: w - 2 * margin, h: h * 0.2 }, unit * 0.1, '#66727B', font, 400, 'center');
+        return;
+      }
       if (isHorizontal) {
         var hasBranch = /branch/.test(kind) && stations.length > 1;
         var routeStations = hasBranch ? stations.slice(0, -1) : stations;
@@ -897,58 +937,71 @@
           h * 0.2, ink, 'center', false);
         var left = margin + h * 0.12, right = w - margin - h * 0.12;
         var trackY = h * (hasBranch ? 0.55 : 0.65);
-        line(left, trackY, right, trackY, accent, h * 0.055);
-        arrow({ x: right - h * 0.2, y: trackY - h * 0.1, w: h * 0.2, h: h * 0.2 }, 'right', accent);
+        var stationGap = (right - left) / Math.max(1, routeStations.length - 1);
+        var stationUnit = Math.min(h, stationGap * 4);
+        line(left, trackY, right, trackY, accent, stationUnit * 0.055);
+        var horizontalDirection = routeLine ? routeDirection : 'right';
+        var routeArrowSize = stationUnit * 0.2;
+        arrow({ x: horizontalDirection === 'left' ? left : right - routeArrowSize, y: trackY - routeArrowSize / 2,
+          w: routeArrowSize, h: routeArrowSize }, horizontalDirection, accent);
         routeStations.forEach(function (station, index) {
           var cx = routeStations.length === 1 ? (left + right) / 2 : left + index * (right - left) / (routeStations.length - 1);
-          circle(cx, trackY, h * 0.038, index === selected ? accent : '#FFFFFF', accent, h * 0.012);
+          circle(cx, trackY, stationUnit * 0.038, index === selected ? accent : '#FFFFFF', accent, stationUnit * 0.012);
           var cellW = Math.min((right - left) / Math.max(routeStations.length, 1) * 0.92, h * 1.5, w - 2 * margin);
           var labelX = Math.max(margin, Math.min(cx - cellW / 2, w - margin - cellW));
           bilingual(station.zh, station.en, { x: labelX, y: h * (hasBranch ? 0.27 : 0.35), w: cellW, h: h * 0.22 },
             h * 0.14, ink, 'center', index === selected);
-          text(station.code, { x: labelX, y: h * (hasBranch ? 0.63 : 0.75), w: cellW, h: h * 0.12 },
-            h * 0.1, ink, Core.FONT_NUM, 400, 'center');
+          text(station.code, { x: labelX, y: h * (hasBranch ? 0.63 : 0.75), w: cellW, h: stationUnit * 0.12 },
+            stationUnit * 0.1, ink, Core.FONT_NUM, 400, 'center');
+          transferLabels(station, { x: labelX, y: h * (hasBranch ? 0.76 : 0.88), w: cellW, h: h * 0.09 }, h * 0.065, 'center');
         });
         if (hasBranch) {
           var branch = stations[stations.length - 1];
           var forkX = left + (right - left) * 0.5;
           var endX = left + (right - left) * 0.8;
           add('path', { d: 'M' + forkX + ' ' + trackY + ' L' + (forkX + h * 0.28) + ' ' + (h * 0.86) +
-            ' L' + endX + ' ' + (h * 0.86), fill: 'none', stroke: accent, 'stroke-width': h * 0.04 });
-          circle(endX, h * 0.86, h * 0.033, selected === stations.length - 1 ? accent : '#FFFFFF', accent, h * 0.012);
+            ' L' + endX + ' ' + (h * 0.86), fill: 'none', stroke: accent, 'stroke-width': stationUnit * 0.04 });
+          circle(endX, h * 0.86, stationUnit * 0.033, selected === stations.length - 1 ? accent : '#FFFFFF', accent, stationUnit * 0.012);
           var branchW = Math.min(h * 1.6, w - 2 * margin);
           var branchX = Math.max(margin, Math.min(endX - branchW / 2, w - margin - branchW));
           bilingual(branch.zh, branch.en, { x: branchX, y: h * 0.63, w: branchW, h: h * 0.19 },
             h * 0.12, ink, 'center', false);
+          transferLabels(branch, { x: branchX, y: h * 0.91, w: branchW, h: h * 0.07 }, h * 0.06, 'center');
         }
       } else {
         var hh = Math.min(w * 0.22, h * 0.12);
         rect(0, 0, w, hh, accent);
         bilingual(routeTitle, routeSubtitle, { x: margin, y: hh * 0.12, w: w - 2 * margin, h: hh * 0.75 },
           hh * 0.48, Core.contrastTextColor(accent), 'center', false);
-        var top = hh + margin + unit * 0.08, bottom = h - margin - unit * 0.05;
+        var hasTransfers = stations.some(function (station) { return !!station.transfers; });
+        var top = hh + margin + unit * 0.08, bottom = h - margin - unit * (hasTransfers ? 0.14 : 0.05);
         var trackX = isDouble ? w * 0.36 : w * 0.3;
         var step = stations.length > 1 ? (bottom - top) / (stations.length - 1) : 0;
+        var stationUnit = step ? Math.min(unit, step * 10) : unit;
         [trackX].concat(isDouble ? [w * 0.65] : []).forEach(function (tx, trackIndex) {
-          line(tx, top - unit * 0.03, tx, bottom + unit * 0.03, accent, unit * 0.035);
+          line(tx, top - stationUnit * 0.03, tx, bottom + stationUnit * 0.03, accent, stationUnit * 0.035);
           stations.forEach(function (station, index) {
             var cy = stations.length === 1 ? (top + bottom) / 2 : top + index * step;
             var active = index === selected;
             if (active) rect(trackIndex === 0 && isDouble ? margin * 0.3 : tx,
-              cy - unit * 0.037, isDouble ? w * 0.34 : w - tx - margin * 0.2, unit * 0.074, accent);
-            circle(tx, cy, unit * 0.018, '#FFFFFF', accent, unit * 0.006);
+              cy - stationUnit * 0.037, isDouble ? w * 0.34 : w - tx - margin * 0.2, stationUnit * 0.074, accent);
+            circle(tx, cy, stationUnit * 0.018, '#FFFFFF', accent, stationUnit * 0.006);
             var labelX = isDouble && trackIndex === 0 ? margin * 0.6 : tx + unit * 0.055;
             var labelW = isDouble ? w * 0.26 : w - labelX - margin;
-            bilingual(station.zh, station.en, { x: labelX, y: cy - Math.min(unit * 0.035, step * 0.3),
-              w: labelW, h: Math.min(unit * 0.073, (step || unit * 0.1) * 0.75) },
+            var labelH = Math.min(unit * 0.073, (step || unit * 0.1) * (hasTransfers ? 0.52 : 0.75));
+            bilingual(station.zh, station.en, { x: labelX, y: hasTransfers ? cy - labelH / 2 : cy - Math.min(unit * 0.035, step * 0.3),
+              w: labelW, h: labelH },
               unit * (isDouble ? 0.034 : 0.048), active ? Core.contrastTextColor(accent) : ink,
               isDouble && trackIndex === 0 ? 'right' : 'left', active);
             text(station.code, { x: trackIndex === 0 && isDouble ? tx - unit * 0.065 : tx - unit * 0.06,
-              y: cy - unit * 0.018, w: unit * 0.042, h: unit * 0.036 }, unit * 0.03, ink, Core.FONT_NUM, 400, 'center');
+              y: cy - stationUnit * 0.018, w: unit * 0.042, h: stationUnit * 0.036 }, stationUnit * 0.03, ink, Core.FONT_NUM, 400, 'center');
+            transferLabels(station, { x: labelX, y: cy + labelH * 0.6,
+              w: labelW, h: Math.min(unit * 0.055, (step || unit) * 0.25) }, unit * 0.031,
+              isDouble && trackIndex === 0 ? 'right' : 'left');
           });
         });
-        if (isDouble) arrow({ x: w * 0.45, y: (top + bottom) / 2 - unit * 0.06, w: w * 0.1, h: unit * 0.12 }, direction, accent);
-        else arrow({ x: margin * 0.6, y: h * 0.45, w: w * 0.13, h: unit * 0.2 }, direction, accent);
+        if (isDouble) arrow({ x: w * 0.45, y: (top + bottom) / 2 - unit * 0.06, w: w * 0.1, h: unit * 0.12 }, routeDirection, accent);
+        else arrow({ x: margin * 0.6, y: h * 0.45, w: w * 0.13, h: unit * 0.2 }, routeDirection, accent);
       }
       if (footer) text(footer, { x: margin, y: h - margin * 0.65, w: w - 2 * margin, h: margin * 0.5 },
         unit * 0.025, ink);
@@ -979,12 +1032,7 @@
           rect(0, 0, w, Math.min(h * 0.03, w * 0.15), '#C62828');
           symbol(iconId || 'crt', { x: margin, y: h * 0.08, w: w - 2 * margin, h: w * 0.45 }, '#00843D');
           arrow({ x: w * 0.22, y: h * 0.22, w: w * 0.55, h: w * 0.45 }, 'down', '#C62828');
-          var characters = Array.from(title);
-          var postStep = h * 0.49 / Math.max(characters.length, 1);
-          characters.forEach(function (ch, i) {
-            text(ch, { x: w * 0.15, y: h * 0.43 + i * postStep, w: w * 0.7, h: postStep * 0.94 },
-              w * 0.5, ink, font, 700, 'center');
-          });
+          verticalText(title, { x: w * 0.15, y: h * 0.43, w: w * 0.7, h: h * 0.49 }, w * 0.5, ink, true);
           paragraph(value(fields, 'phone', body || footer), { x: margin, y: h * 0.31, w: w - 2 * margin, h: h * 0.09 }, w * 0.13, ink, font);
         } else {
           symbol(iconId || 'crt', { x: margin, y: h * 0.1, w: w * 0.35, h: h * 0.2 }, ink);

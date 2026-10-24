@@ -45,14 +45,14 @@ test('模板默认字段和元素属性每次独立创建，未知模板回退�
   assert.equal(a.backgroundColor, null);
 });
 
-test('新增库移除出入口确认附牌、检票机状态和票价表，补横梁后保留81款当前预设', () => {
+test('新增库移除指定预设，补横梁与单侧站台后保留82款当前预设', () => {
   const removed = ['entrance-identity', 'gate-indicator', 'fare-information'];
   for (const id of removed) {
     assert.equal(CRT.ALL.some(template => template.id === id), false, id + '不得出现在新增库');
     assert.ok(CRT.REMOVED_IDS.includes(id), id + '必须标记为旧项目兼容');
   }
-  assert.equal(CRT.ALL.length, 81);
-  assert.equal(CRT.LEGACY_ALL.length, 90);
+  assert.equal(CRT.ALL.length, 82);
+  assert.equal(CRT.LEGACY_ALL.length, 91);
   assert.equal(CRT.REMOVED_IDS.length, 9);
 });
 

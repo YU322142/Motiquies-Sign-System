@@ -22,8 +22,8 @@ function withTemplate(id) {
 }
 function close(actual, expected, message) { assert.ok(Math.abs(actual - expected) < 1e-8, message + ': ' + actual + ' != ' + expected); }
 
-test('全部 81 款在用标识均生成可独立选择的基础元素，实例之间不复用 ID', () => {
-  assert.equal(Catalog.ALL.length, 81);
+test('全部 82 款在用标识均生成可独立选择的基础元素，实例之间不复用 ID', () => {
+  assert.equal(Catalog.ALL.length, 82);
   const removed = ['first-last-train', 'interconnection-timetable', 'network-map', 'network-map-double', 'street-map', 'evacuation-map',
     'entrance-identity', 'gate-indicator', 'fare-information'];
   assert.ok(Catalog.ALL.every((template) => !removed.includes(template.id)));

@@ -1587,7 +1587,7 @@
         basicSets[id] = $$('[data-palette-pane="basic"] .card-name').map(function (node) { return node.textContent; }).join('|');
         paletteTab('templates');
       });
-      ok('S42 四牌型完整覆盖全部 81 款且移除停用预设', Object.keys(seen).length === 81 &&
+      ok('S42 四牌型完整覆盖全部 82 款且移除停用预设', Object.keys(seen).length === 82 &&
         ['first-last-train', 'interconnection-timetable', 'network-map', 'network-map-double', 'street-map', 'evacuation-map',
           'entrance-identity', 'gate-indicator', 'fare-information'].every(function (id) { return !seen[id]; }) &&
         $('[data-sign-section="horizontal"]') === navNode && $('.crt-toolbar input') === searchNode);
@@ -2703,6 +2703,94 @@
       }
     }
 
+    async function s58_savedLineStationSelection() {
+      var w = W(), S = w.SignState, R = w.SignRoutes;
+      var main = R.createLine(w.JSON.parse(JSON.stringify({ id: 's58-main', nameZh: '云杉线', nameEn: 'Spruce Line', color: '#592C82', direction: 'backward',
+        currentStationId: 's58-a', stations: [
+          { id: 's58-a', nameZh: '同名站', nameEn: 'West Common', code: 'S01', transfers: '' },
+          { id: 's58-b', nameZh: '同名站', nameEn: 'East Common', code: 'S02', transfers: '96号线' },
+          { id: 's58-c', nameZh: '云杉谷', nameEn: 'Spruce Valley', code: 'S03', transfers: '' }] })));
+      var other = R.createLine(w.JSON.parse(JSON.stringify({ id: 's58-transfer', nameZh: '96号线', nameEn: 'Line 96', color: '#F27019', stations: [
+        { id: 's58-t', nameZh: '同名站', nameEn: 'Transfer Common', code: 'T01', transfers: '云杉线' }] })));
+      R.save(main); R.save(other);
+      w.App.select(null); w.App.update(function () { return S.createSign(); });
+      var lineChoice = $('[data-context-line]');
+      ok('S58 无需打开线路管理便能从已有线路直接选择制作来源', !!lineChoice && Array.from(lineChoice.options).some(function (option) { return option.value === 'local:' + main.id; }));
+      ok('S58 每块车站或换乘标识提供已有线路站点选择入口', typeof w.SignPanel.buildTemplateContent === 'function');
+      if (!lineChoice || typeof w.SignPanel.buildTemplateContent !== 'function') return;
+      function choose(selector, value) { var node = $(selector); node.value = value; node.dispatchEvent(new w.Event('change', { bubbles: true })); }
+      choose('[data-context-line]', 'local:' + main.id); choose('[data-context-station]', 's58-b');
+      ok('S58 当前车站按稳定ID区分同名站且不改写保存的线路', w.App.state.context.stationId === 's58-b' && R.list().find(function (line) { return line.id === main.id; }).currentStationId === 's58-a');
+      signSection('route'); paletteTab('templates'); $('[data-template-id="route-vertical-double"]').click();
+      var route = w.App.state.rows[0];
+      ok('S58 标准线路图保存完整选用线路本站与方向快照', route.route && route.route.line.id === main.id && route.route.line.currentStationId === 's58-b' && route.route.line.direction === 'backward' && route.route.source === 'local');
+      ok('S58 标准线路图完整显示站表和各站换乘线自己的颜色', JSON.stringify(route.elements).indexOf('Spruce Valley') !== -1 && route.elements.some(function (element) { return element.props.color === '#F27019' || element.props.fill === '#F27019'; }));
+      ok('S58 标准线路图可重新进入线路编辑', !!$('[data-route-edit]'));
+      $('[data-route-edit]').click();
+      $('[data-route-action="apply"]').click();
+      route = w.App.state.rows[0];
+      ok('S58 编辑标准线路图后仍保留双向预设和本站', route.templateId === 'route-vertical-double' && route.route.line.currentStationId === 's58-b');
+      signSection('vertical'); paletteTab('templates'); $('[data-template-id="station-name-vertical"]').click();
+      var stationRow = w.App.state.rows[0];
+      ok('S58 竖排站名作为一个完整的基础文字元素编辑', stationRow.elements.some(function (element) { return element.type === 'plain-text' && element.props.text === '同名站' && element.props.writingMode === 'vertical'; }));
+      ok('S58 当前标识显示已选线路及车站入口', !!$('[data-sign-data-edit]'));
+      $('[data-sign-data-edit]').click();
+      choose('[data-sign-data-station]', 's58-c');
+      $('[data-sign-data-apply]').click();
+      ok('S58 标识选站后同时更新中英文站名和站号', JSON.stringify(w.App.state.rows[0].elements).indexOf('Spruce Valley') !== -1 && JSON.stringify(w.App.state.rows[0].elements).indexOf('S03') !== -1);
+      ok('S58 单牌选站不改动左侧当前车站或其他线路图', w.App.state.context.stationId === 's58-b' && workspaceRow(route.id).route.line.currentStationId === 's58-b');
+      var vertical = w.App.state.rows[0].elements.find(function (element) { return element.type === 'plain-text' && element.props.writingMode === 'vertical'; });
+      w.App.select(vertical.id);
+      var text = $('#right-panel-body [data-plain-text-content]');
+      ok('S58 竖排文字输入框显示完整文本', !!text && text.value === '云杉谷');
+      if (text) { text.value = '新云杉谷'; text.dispatchEvent(new w.Event('input', { bubbles: true })); }
+      ok('S58 修改完整竖排文本后保留一个元素及输入焦点节点', S.findElement(w.App.state, vertical.id).element.props.text === '新云杉谷' && $('#right-panel-body [data-plain-text-content]') === text);
+      signSection('horizontal'); paletteTab('templates'); $('[data-template-id="transfer-wall"]').click();
+      $('[data-sign-data-edit]').click();
+      ok('S58 换乘牌从当前站已有换乘信息预选线路', !!$('[data-sign-data-transfer="s58-transfer"]') && $('[data-sign-data-transfer="s58-transfer"]').checked);
+      $('[data-sign-data-apply]').click();
+      ok('S58 换乘标识使用已保存换乘线名称与本色', w.App.state.rows[0].elements.some(function (element) { return element.type === 'number-line' && element.props.lines[0].number === '96' && element.props.lines[0].color === '#F27019'; }));
+      var restored = S.deserializeSign(S.serializeSign(w.App.state));
+      ok('S58 项目恢复保留各牌选用站点与换乘线路', restored.rows[0].stationContext && restored.rows[0].stationContext.stationId === 's58-b' && restored.rows[0].stationContext.transferLineIds.indexOf(other.id) !== -1);
+      var transferId = w.App.state.rows[0].id;
+      w.App.update(function (sign) { return S.setRowAspectRatio(sign, transferId, 5); });
+      var active = w.App.state.workspace.activeId;
+      var routeBoard = w.SignWorkspace.list(w.App.state).find(function (board) { return board.sign.rows.some(function (item) { return item.id === route.id; }); });
+      $('[data-sign-data-edit]').click(); choose('[data-sign-data-station]', 's58-c');
+      $('[data-sign-data-bulk]').click();
+      var exclude = $('[data-sign-data-board="' + routeBoard.id + '"]'); exclude.checked = false; exclude.dispatchEvent(new w.Event('change', { bubbles: true }));
+      ok('S58 一键更换可选其他牌面并清楚显示参与数量', !$('[aria-label="参与更换的牌面"]').hidden && /2/.test($('[data-sign-data-apply]').textContent));
+      $('[data-sign-data-apply]').click();
+      ok('S58 批量仅更换勾选的车站与换乘牌，未选线路图保持原站', w.App.state.rows[0].stationContext.stationId === 's58-c' && workspaceRow(stationRow.id).stationContext.stationId === 's58-c' && workspaceRow(route.id).route.line.currentStationId === 's58-b');
+      ok('S58 批量保留活动牌面、手调比例和左侧当前站', w.App.state.workspace.activeId === active && w.App.state.rows[0].widthRatio === 5 && w.App.state.context.stationId === 's58-b');
+      var savedCount = w.SignPresets.list().length;
+      w.SignPresets.save('S58带选站预设', w.App.state.rows[0].elements, w.App.state.rows[0]);
+      ok('S58 我的标识预设也保存每牌选站来源', w.SignPresets.list()[savedCount].row.stationContext.stationId === 's58-c');
+      var latest = R.addStation(main, w.JSON.parse(JSON.stringify({ id: 's58-d', nameZh: '新扩建站', nameEn: 'New Extension', code: 'S04', transfers: '' })));
+      R.save(latest); $('[data-sign-data-edit]').click();
+      ok('S58 旧牌选站立即读取线路库新增站点，无需先切其他线路', Array.from($('[data-sign-data-station]').options).some(function (option) { return option.value === 's58-d'; }));
+      $('[aria-label="关闭车站选择"]').click();
+      w.App.update(function (sign) { return w.SignWorkspace.select(sign, routeBoard.id); });
+      w.App.select(w.App.state.rows[0].elements[0].id); $('[data-route-edit]').click();
+      var unsaved = $('[data-route-field="nameEn"]'); unsaved.value = '仅甲牌未保存'; unsaved.dispatchEvent(new w.Event('input', { bubbles: true }));
+      $('[aria-label="关闭线路管理"]').click();
+      signSection('route'); paletteTab('templates'); $('[data-template-id="train-route"]').click();
+      var secondMap = w.App.state.rows[0]; $('[data-route-edit]').click();
+      ok('S58 同线路另一块图的本站和方向不被前牌草稿缓存覆盖', $('[data-route-field="nameEn"]').value === secondMap.route.line.nameEn && $('[data-station-current]:checked').value === secondMap.route.line.currentStationId);
+      $('[aria-label="关闭线路管理"]').click();
+      w.App.update(function (sign) { return w.SignWorkspace.select(sign, routeBoard.id); });
+      w.App.select(w.App.state.rows[0].elements[0].id); $('[data-route-edit]').click();
+      ok('S58 返回甲牌仍可继续本牌未保存的线路草稿', $('[data-route-field="nameEn"]').value === '仅甲牌未保存');
+      $('[aria-label="关闭线路管理"]').click();
+      $('[data-sign-data-edit]').click(); choose('[data-sign-data-station]', 's58-a'); $('[data-sign-data-apply]').click();
+      $('[data-route-edit]').click();
+      ok('S58 显式更换车站后旧的线路草稿不会再覆盖新牌面', $('[data-route-field="nameEn"]').value !== '仅甲牌未保存' && $('[data-station-current]:checked').value === 's58-a');
+      $('[aria-label="关闭线路管理"]').click();
+      signSection('horizontal'); paletteTab('templates'); $('[data-template-id="platform-direction-single"]').click();
+      var single = w.App.state.rows[0];
+      ok('S58 单侧站台预设可直接复用当前线路与方向，保留单侧尺寸', single.templateId === 'platform-direction-single' && single.stationContext.line.id === main.id && single.widthRatio === 6.25 && single.elements.some(function (element) { return element.type === 'plain-text' && /方向/.test(element.props.text); }));
+    }
+
     // ─── 主流程 ───────────────────────────────────────────
 
     var frameEl = document.getElementById('app-frame');
@@ -2766,6 +2854,7 @@
         await s55_fourSidedEntryEditor();
         s56_contextSingleEntryAspect();
         await s57_publicServerLines();
+        await s58_savedLineStationSelection();
       }).then(function () {
         var passed = results.filter(function (r) { return r.pass; }).length;
         var total = results.length;

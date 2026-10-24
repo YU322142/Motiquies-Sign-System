@@ -8,7 +8,7 @@
 
 ```
 core.js → icons.js → crt-symbols.js → crt-catalog.js → crt-render.js
-→ state.js → render.js → composition.js → routes.js → line-catalog.js → workspace.js → ui.js → presets.js
+→ state.js → render.js → composition.js → routes.js → line-catalog.js → workspace.js → sign-content.js → ui.js → presets.js
 → storage.js → exporters.js → panel.js → interact.js → main.js
 ```
 
@@ -32,6 +32,8 @@ core.js → icons.js → crt-symbols.js → crt-catalog.js → crt-render.js
 - 状态模型（state.js）：`SignState { widthMode, width, rowHeight, aspectLocked, backgroundColor, rows, context?, workspace? }`，`Row { id, elements, layout?, widthRatio?, referenceWidthRatio?, templateId?, backgroundColor?, route?, fourSided? }`，`Element { id, type, props }`。缺省为横向流式行；`layout: 'free'` 的行使用 `props.box {x,y,width,height}`，各值均为行高的比例。所有操作（增删行/元素、移动、属性合并、序列化/反序列化校验）都是纯函数。
 - 项目当前线路和车站保存在 `sign.context = {line, stationId}`；`State.setProjectContext` 规范化线路和站点 ID。`composition.contextOverrides` 按预设语义填入新牌的线路、站名、站号和方向；`contextProps` 为新加的基础线路／站名元素提供默认值。自建线路使用自定颜色，不自动套用重庆线路色。切站只改变以后添加的默认信息，既有元素不批量改写。
 - 线路图行另存 `row.route = {line, orientation}`，保留该图自己的完整线路快照；项目导入时经 `SignRoutes.normalizeLine` 复核。项目当前车站与某张线路图的本站可以不同。
+- 标准线路图传 `routeLine` 完整数据给 CRT metrics，由 `Routes.forContext` 按站点 ID 确定本站，保留方向、换乘和相关线路配色；不能再仅将站表转成文字。单牌来源另存 `row.stationContext = {line, stationId, source?, transferLineIds?}`，经 `State.setRowStationContext` 规范化，并随项目及我的预设保存。
+- `sign-content.js` 的 `SignContent.build` 为模板点击、拖入和更换选站提供统一配方；`replaceRow` / `replaceBoards` 保留原行 ID、牌型、手调比例与宽度模式，批量操作恢复原活动牌和共享当前车站。选站窗口优先读相同来源与 ID 的最新线路库，缺失才使用快照；线路编辑草稿按来源、线路 ID 和牌面行 ID 隔离。
 - `App.layout` 缓存最近一次 `layoutSign` 结果，供交互层（落点指示、gap 计算）与设置面板复用。
 - 相邻自动内边距：元素属性 `paddingAuto`（新建默认 true，旧存档缺省 false 钉住）。`applyPaddingAuto` 在 App.update 管线中幂等重算——paddingAuto 元素的左/右侧在同行同通道紧邻其他元素（空白占位不算）时取 0.1，否则 0.2；经 `updateElementProps` 写入左右内边距视为手动编辑并钉住（false）。space 恒为 false。
 - 选中态（`App.selection.elementId`）不属于 SignState，驱动右栏面板模式（元素属性 / 预设预览 / 标识牌设置）。
@@ -117,11 +119,11 @@ HTTP 缓存坑：改完 js 后浏览器可能仍跑旧代码（症状：失败�
 
 左栏以横牌、竖牌、线路图、安全牌为四个专区，每区包含基础元素、组合预设与我的预设，共用左侧的线路管理入口。专区切换保持导航、搜索框和页签节点，更新卡片内容；移动端基础分类切换同样保留 chip 行及滚动位置。
 
-`crt-catalog.js` 中 `SignCRT.ALL` 提供当前 81 款预设。`LEGACY_ALL` 保留完整90款记录，即初次整理89款加实物补充的 `transfer-doorhead` 横梁；`REMOVED_IDS` 列出已移出的九款：两个时刻表、四个地图，以及 `entrance-identity`（出入口确认矩形附牌）、`gate-indicator`（自动检票机通行状态）、`fare-information`（票价表）。`get(id)`、`defaultFields` 和 `createProps` 仍按原 ID 恢复旧项目，不能为恢复兼容而重新显示已移除项目。来源见 [重庆标准覆盖记录](chongqing-standard.md)。
+`crt-catalog.js` 中 `SignCRT.ALL` 提供当前 82 款预设。`LEGACY_ALL` 保留完整91款记录，即初次整理89款，加实物补充的 `transfer-doorhead` 横梁及 `platform-direction-single` 单侧站台牌；`REMOVED_IDS` 列出已移出的九款：两个时刻表、四个地图，以及 `entrance-identity`（出入口确认矩形附牌）、`gate-indicator`（自动检票机通行状态）、`fare-information`（票价表）。`get(id)`、`defaultFields` 和 `createProps` 仍按原 ID 恢复旧项目，不能为恢复兼容而重新显示已移除项目。来源见 [重庆标准覆盖记录](chongqing-standard.md)。
 
 `composition.js` 的 `materialize` 将预设转换为普通元素，新增操作不保留完整 `crt-sign` 元素。简单横牌直接组合原有的箭头、线路、双语文本与出口等类型；复杂牌面将几何指令转换为文字、图标、图形及原有元素，并附加 `props.box`。界面中的新增组合预设通过工作区入口建立独立牌面。`State.addTemplateRow(sign, preferredRowId, elements, options)` 是单块 Sign 内部的行操作，按定位盒识别流式或自由行，并从 `options` 接收参考比例、预设来源与线路图快照；不能直接用它把多个独立预设追加为当前牌面的多行。更新已有线路图可用 `replaceRowId` 明确替换目标行。
 
-新增 `plain-text`（单行文字：字体、粗细、颜色、字号比例）和 `shape`（矩形、圆形、线段、路径、多边形：安全几何属性、viewBox、填充及描边）。导入时校验这些属性与定位盒；合法数据应保持 JSON 往返一致。新增符号在 `crt-symbols.js`，通过原有 `icon` 类型选择，不修改生成物 `icons.js`。数字线路、出入口及出口的双语标签可编辑，仍走原有排版。
+新增 `plain-text`（文字：字体、粗细、颜色、字号比例、`writingMode` 横／竖排、`letterSpacingRatio` 竖排字距）和 `shape`（矩形、圆形、线段、路径、多边形：安全几何属性、viewBox、填充及描边）。竖排 metrics 计算完整文字的逐字墨区位置，draw 使用同一结果输出一个带 tspan 的 text，不拆成多个元素。导入时校验这些属性与定位盒；合法数据应保持 JSON 往返一致。新增符号在 `crt-symbols.js`，通过原有 `icon` 类型选择，不修改生成物 `icons.js`。数字线路、出入口及出口的双语标签可编辑，仍走原有排版。
 
 绑定背景的文字或图标以 `contrastSourceId` 指向同一行的背景 `shape`。更新其 `fill` 时，状态函数自动重算 `autoContrast: true` 的文字／图标颜色；手动改色设置 `autoContrast: false`，右栏「随背景自动黑白」可恢复。项目导入、复制和我的预设重新添加时重映射背景 ID，避免关联到另一块牌。门套数字色块通过编译指令的 `contrastKey`／`contrastOf` 建立关联，元数据不写入 SVG。
 

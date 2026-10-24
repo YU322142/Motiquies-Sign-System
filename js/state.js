@@ -84,6 +84,7 @@
   var DEFAULT_PROPS = {
     'plain-text': {
       text: '文字', font: 'zh', bold: false, color: '#000000', fontSizeRatio: 1,
+      writingMode: 'horizontal', letterSpacingRatio: 0.15,
       backgroundColor: null, elementAlign: 'left', padding: { top: 0, right: 0, bottom: 0, left: 0 },
     },
     'shape': {
@@ -477,7 +478,7 @@
     rows[index].layout = free ? 'free' : 'flow';
     if (free) rows[index].widthRatio = freeWidth(elements);
     else delete rows[index].widthRatio;
-    ['templateId', 'referenceWidthRatio', 'route', 'fourSided', 'backgroundColor'].forEach(function (key) { delete rows[index][key]; });
+    ['templateId', 'referenceWidthRatio', 'route', 'fourSided', 'backgroundColor', 'stationContext'].forEach(function (key) { delete rows[index][key]; });
     if (Number.isFinite(options.widthRatio) && options.widthRatio > 0) {
       rows[index].widthRatio = Core.clamp(options.widthRatio, 0.1, 64);
       rows[index].referenceWidthRatio = Number.isFinite(options.referenceWidthRatio)
@@ -495,6 +496,8 @@
       orientation: options.route.orientation === 'horizontal' ? 'horizontal' : 'vertical',
     };
     if (rows[index].route && (options.route.source === 'server' || options.route.source === 'local')) rows[index].route.source = options.route.source;
+    var stationContext = normalizeStationContext(options.stationContext);
+    if (stationContext) rows[index].stationContext = stationContext;
     if (options.fourSided || rows[index].templateId === 'four-sided-guide') {
       rows[index].fourSided = options.fourSided ? normalizeFourSided(options.fourSided) : createFourSided();
       var fourReference = Core.clamp(rows[index].fourSided.referenceRowRatio / rows[index].fourSided.entries.length, 0.1, 64);
@@ -549,6 +552,39 @@
     if (origin === undefined && sign.context && sign.context.line.id === line.id) origin = sign.context.source;
     if (origin === 'server' || origin === 'local') next.context.source = origin;
     return next;
+  }
+
+  /** A board keeps its selected station independently of the defaults for future boards. */
+  function normalizeStationContext(context, previous) {
+    if (!isPlainObject(context) || !isPlainObject(context.line) || !global.SignRoutes) return null;
+    var line = global.SignRoutes.normalizeLine(context.line);
+    var station = line.stations.find(function (item) { return item.id === context.stationId; });
+    var result = { line: line, stationId: station ? station.id : line.currentStationId || (line.stations[0] && line.stations[0].id) || null };
+    var source = context.source;
+    if (source === undefined && previous && previous.line.id === line.id) source = previous.source;
+    if (source === 'server' || source === 'local') result.source = source;
+    if (Array.isArray(context.transferLineIds)) {
+      var seen = new Set();
+      result.transferLineIds = context.transferLineIds.filter(function (value) {
+        if (typeof value !== 'string' || !value.trim() || seen.has(value)) return false;
+        seen.add(value); return true;
+      }).slice(0, 256);
+    }
+    return result;
+  }
+
+  function setRowStationContext(sign, rowId, context) {
+    var changed = false;
+    var rows = sign.rows.map(function (row) {
+      if (row.id !== rowId) return row;
+      changed = true;
+      var next = Object.assign({}, row);
+      var normalized = normalizeStationContext(context, row.stationContext);
+      if (normalized) next.stationContext = normalized;
+      else delete next.stationContext;
+      return next;
+    });
+    return changed ? Object.assign({}, sign, { rows: rows }) : sign;
   }
 
   function freeWidth(elements) {
@@ -892,6 +928,8 @@
       if (['zh', 'en', 'num'].indexOf(props.font) === -1) props.font = 'zh';
       props.bold = !!props.bold;
       props.fontSizeRatio = sanitizeNumber(props.fontSizeRatio, 0.01, 64, 1);
+      props.writingMode = props.writingMode === 'vertical' ? 'vertical' : 'horizontal';
+      props.letterSpacingRatio = sanitizeNumber(props.letterSpacingRatio, 0, 4, 0.15);
     } else if (el.type === 'shape') {
       if (['rect', 'circle', 'line', 'path', 'polygon'].indexOf(props.shape) === -1) props.shape = 'rect';
       var vb = Array.isArray(props.viewBox) ? props.viewBox : defaults.viewBox;
@@ -1043,6 +1081,8 @@
         line: global.SignRoutes.normalizeLine(row.route.line), orientation: row.route.orientation === 'horizontal' ? 'horizontal' : 'vertical',
       };
       if (restoredRow.route && (row.route.source === 'server' || row.route.source === 'local')) restoredRow.route.source = row.route.source;
+      var stationContext = normalizeStationContext(row.stationContext);
+      if (stationContext) restoredRow.stationContext = stationContext;
       if (isPlainObject(row.fourSided)) restoredRow.fourSided = normalizeFourSided(row.fourSided);
       else if (restoredRow.templateId === 'four-sided-guide') restoredRow.fourSided = createFourSided();
       return restoredRow;
@@ -1097,6 +1137,7 @@
     addTemplateRow: addTemplateRow,
     setRowAspectRatio: setRowAspectRatio,
     setProjectContext: setProjectContext,
+    setRowStationContext: setRowStationContext,
     moveElement: moveElement,
     updateElementProps: updateElementProps,
     updateSignSettings: updateSignSettings,

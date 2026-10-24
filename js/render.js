@@ -477,6 +477,40 @@
     var fontSize = Math.max(0.001, h * ratio);
     var weight = props.bold ? 700 : 400;
     var text = String(props.text == null ? '' : props.text).replace(/\r?\n/g, ' ');
+    if (props.writingMode === 'vertical') {
+      var characters = Array.from(text);
+      var spacing = Number.isFinite(props.letterSpacingRatio) ? Core.clamp(props.letterSpacingRatio, 0, 4) : 0.15;
+      function glyphMetrics(size) {
+        return characters.map(function (character) {
+          var ink = measure.ink(character, font, weight, size);
+          var asc = measure.ascent(character, font, weight, size);
+          var desc = measure.descent ? measure.descent(character, font, weight, size) : size * 0.21;
+          return { text: character, abl: ink.abl, abr: ink.abr, ascent: asc, descent: desc,
+            width: Math.max(0, ink.abl + ink.abr), height: Math.max(0, asc + desc) };
+        });
+      }
+      function stackHeight(glyphs, size) {
+        return glyphs.reduce(function (sum, glyph) { return sum + glyph.height; }, 0) + Math.max(0, glyphs.length - 1) * size * spacing;
+      }
+      var glyphs = glyphMetrics(fontSize);
+      var availableHeight = Math.max(0, pad.size);
+      var stack = stackHeight(glyphs, fontSize);
+      // Canvas ink bounds can round to pixels: converge using the actual remeasured ink.
+      for (var attempt = 0; attempt < 4 && stack > availableHeight + 1e-8; attempt++) {
+        fontSize *= availableHeight / Math.max(stack, 0.001) * 0.999;
+        glyphs = glyphMetrics(fontSize);
+        stack = stackHeight(glyphs, fontSize);
+      }
+      var columnWidth = glyphs.reduce(function (width, glyph) { return Math.max(width, glyph.width); }, 0);
+      var top = pad.t;
+      glyphs.forEach(function (glyph) {
+        glyph.x = pad.l + (columnWidth - glyph.width) / 2 + glyph.abl;
+        glyph.base = top + glyph.ascent;
+        top += glyph.height + fontSize * spacing;
+      });
+      return { pad: pad, font: font, fontSize: fontSize, weight: weight, text: text, writingMode: 'vertical',
+        glyphs: glyphs, inkWidth: columnWidth, inkHeight: stack, width: pad.l + columnWidth + pad.r };
+    }
     var bounds = measure.ink(text, font, weight, fontSize);
     var ascent = measure.ascent(text, font, weight, fontSize);
     var descent = measure.descent ? measure.descent(text, font, weight, fontSize) : fontSize * 0.21;
@@ -826,6 +860,17 @@
   function drawSpace() { /* 空白占位，无可见内容 */ }
 
   function drawPlainText(g, el, mt) {
+    if (mt.writingMode === 'vertical') {
+      var column = mk('text', { 'font-family': mt.font, 'font-size': mt.fontSize,
+        'font-weight': mt.weight, fill: el.props.color || '#000000', 'aria-label': mt.text });
+      mt.glyphs.forEach(function (glyph) {
+        var span = mk('tspan', { x: glyph.x, y: glyph.base });
+        span.textContent = glyph.text;
+        column.appendChild(span);
+      });
+      g.appendChild(column);
+      return;
+    }
     g.appendChild(mkText(mt.text, { x: mt.x, y: mt.base, 'font-family': mt.font,
       'font-size': mt.fontSize, 'font-weight': mt.weight, fill: el.props.color || '#000000' }));
   }

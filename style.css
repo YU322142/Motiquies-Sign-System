@@ -429,6 +429,30 @@ input, select {
 .project-context-line { max-width: 78px; font-size: 12px; font-weight: 600; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
 .project-context-bar select { flex: 1; min-width: 0; width: 70px; padding: 3px 2px; border: 1px solid #cdd9ee; border-radius: 4px; background: #fff; font-size: 12px; }
 .project-context-manage { color: var(--accent); font-size: 11px; white-space: nowrap; padding: 3px 1px; }
+.project-context-manage[hidden], .sign-data-entry[hidden], .sign-data-transfers[hidden], .sign-data-boards[hidden] { display: none; }
+.sign-data-entry { display: grid; gap: 7px; padding: 10px; margin-bottom: 12px; border: 1px solid #cdd9ee; border-radius: 8px; background: #f7faff; }
+.modal.sign-data-modal { display: flex; flex-direction: column; gap: 12px; width: min(620px, calc(100vw - 24px)); max-height: calc(100dvh - 24px); }
+.sign-data-modal h3 { margin: 0; }
+.sign-data-body { overflow-y: auto; min-height: 0; padding: 2px; }
+.sign-data-fields { display: grid; grid-template-columns: repeat(2, minmax(0, 1fr)); gap: 8px 12px; }
+.sign-data-fields .field:first-child { grid-column: 1 / -1; }
+.sign-data-fields select { width: 100%; min-width: 0; min-height: 36px; padding: 7px 8px; border: 1px solid var(--border); border-radius: 6px; background: #fff; }
+.sign-data-choice, .sign-data-bulk-label { display: flex; align-items: center; gap: 8px; padding: 7px 4px; font-size: 13px; cursor: pointer; }
+.sign-data-choice input, .sign-data-bulk-label input { width: 16px; height: 16px; flex: 0 0 16px; }
+.sign-data-choice span:last-child { min-width: 0; overflow-wrap: anywhere; }
+.sign-data-swatch { width: 13px; height: 13px; flex: 0 0 13px; border: 1px solid #0002; border-radius: 50%; }
+.sign-data-boards { padding: 4px 8px; margin-bottom: 12px; border: 1px solid var(--border); border-radius: 6px; max-height: 180px; overflow-y: auto; }
+.sign-data-transfers { margin-bottom: 10px; }
+.sign-data-actions { display: flex; flex-wrap: wrap; gap: 8px; justify-content: flex-end; }
+.sign-data-actions .btn { width: auto; margin: 0; }
+.sign-data-actions .btn:first-child { margin-right: auto; }
+.sign-data-modal .route-modal-header, .sign-data-actions { flex: none; }
+@media (max-width: 600px) {
+  .modal.sign-data-modal { padding: 14px; }
+  .sign-data-actions .btn:first-child { flex-basis: 100%; }
+  .sign-data-actions .btn:not(:first-child) { flex: 1; }
+}
+.sign-data-status { color: #b03a32; font-size: 12px; margin-top: 8px; }
 .palette-chip[hidden] { display: none; }
 .palette-tab {
   flex: 1;

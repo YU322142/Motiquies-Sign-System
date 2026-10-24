@@ -166,6 +166,16 @@
     return line;
   }
 
+  /** 当前车站用于新牌时保留完整线路信息，本站通过稳定 ID 定位。 */
+  function forContext(context, lines) {
+    if (!context || !plain(context.line)) return null;
+    var line = normalizeLine(context.line);
+    if (line.stations.some(function (station) { return station.id === context.stationId; })) {
+      line.currentStationId = context.stationId;
+    }
+    return withRelatedLines(line, lines);
+  }
+
   function fail(message) { throw new Error('线路文件无效：' + message); }
   function assertText(value, label, nonempty) {
     if (typeof value !== 'string' || value.length > 10000 || (nonempty && !value.trim())) fail(label + '必须为' + (nonempty ? '非空' : '') + '字符串');
@@ -457,7 +467,7 @@
     patchLine: patchLine, addStation: addStation, updateStation: updateStation,
     removeStation: removeStation, moveStation: moveStation,
     serialize: serialize, deserialize: deserialize, list: list, save: save, remove: remove,
-    colorFor: colorFor, swatches: swatches, withRelatedLines: withRelatedLines,
+    colorFor: colorFor, swatches: swatches, withRelatedLines: withRelatedLines, forContext: forContext,
     materialize: materialize,
   };
 })(typeof window !== 'undefined' ? window : globalThis);

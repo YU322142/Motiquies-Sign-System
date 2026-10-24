@@ -67,7 +67,7 @@ test('预设单独成行时不继承上一张牌的比例，旧版无比例行�
 });
 test('目录与类型入口移除时刻表、地图和指定三款标识，线路图仍可添加',()=>{
   const removed=['first-last-train','interconnection-timetable','network-map','network-map-double','street-map','evacuation-map'];
-  assert.equal(Catalog.ALL.length,81);
+  assert.equal(Catalog.ALL.length,82);
   removed.forEach(id=>assert.ok(!Catalog.ALL.some(t=>t.id===id),id));
   assert.deepEqual(C.SECTIONS.map(s=>s.id),['horizontal','vertical','route','safety']);
   assert.ok(Catalog.ALL.some(t=>t.id==='route-vertical'));

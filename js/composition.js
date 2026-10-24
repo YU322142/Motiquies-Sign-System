@@ -76,7 +76,7 @@
   function horizontalParts(template, props) {
     if (!template || ['guide', 'facility'].indexOf(template.layout) === -1 || template.width / template.height < 1.8) return null;
     var variant = template.variant || '';
-    if (/direction-split|four-sided|transfer-column|transfer-portrait|security-portrait/.test(variant)) return null;
+    if (/direction-(?:split|single)|four-sided|transfer-column|transfer-portrait|security-portrait/.test(variant)) return null;
     var fields = Object.assign({}, global.SignCRT.defaultFields(template.id), props && props.fields);
     // Multi-section signs retain their own rows and information hierarchy.
     if (fields.body) return null;
@@ -253,7 +253,7 @@
         contrastSourceId: sourceId, autoContrast: true,
       }) }) : el;
     });
-    if (template.id === 'platform-direction-split') {
+    if (template.id === 'platform-direction-split' || template.id === 'platform-direction-single') {
       var background = elements[0];
       var center = elements.find(function (el) {
         return el !== background && el.type === 'shape' && el.props.fill === '#FFFFFF' && el.props.box.height === 1;
@@ -329,6 +329,7 @@
     if (template.id === 'platform-direction') {
       result.backgroundColor = line.color; result.textColor = Core.contrastTextColor(line.color);
     }
+    if (template.id === 'platform-direction-single' || template.id === 'platform-direction-split') result.backgroundColor = line.color;
     return result;
   }
 

@@ -730,6 +730,54 @@
       assertEqual(Number(viewport.getAttribute('height')), 300);
     });
 
+    test('完整竖排文字可整体命中编辑，真实墨区与导出共用metrics', function () {
+      var content = '云间中央站';
+      var parts = SignComposition.materialize('station-name-vertical', { fields: { title: content } }, measure);
+      var element = parts.find(function (part) { return part.type === 'plain-text' && part.props.text === content; });
+      assert(element, '站名是一个完整基础文字元素');
+      assertEqual(element.props.writingMode, 'vertical');
+      var mt = SignRender.plainTextMetrics(element, 400, measure);
+      var rendered = SignRender.renderElement(element, 400, measure).node;
+      assertEqual(rendered.querySelectorAll('.hitbox').length, 1, '整段文字只需一个命中区');
+      assertEqual(rendered.querySelectorAll('text').length, 1, '一个文字节点包含完整站名');
+      assertEqual(rendered.querySelector('text').textContent, content);
+      var spans = rendered.querySelectorAll('tspan');
+      assertEqual(spans.length, Array.from(content).length);
+      var previousBottom = -Infinity;
+      mt.glyphs.forEach(function (glyph, index) {
+        var span = spans[index];
+        assertEqual(Number(span.getAttribute('x')), glyph.x, 'draw消费metrics的横坐标');
+        assertEqual(Number(span.getAttribute('y')), glyph.base, 'draw消费metrics的基线');
+        var top = Number(span.getAttribute('y')) - measure.ascent(glyph.text, mt.font, mt.weight, mt.fontSize);
+        var bottom = Number(span.getAttribute('y')) + measure.descent(glyph.text, mt.font, mt.weight, mt.fontSize);
+        assert(top >= previousBottom - 0.01, '逐字墨区不重叠');
+        assert(top >= -0.01 && bottom <= 400.01, '真实墨区在完整文字盒内');
+        previousBottom = bottom;
+      });
+      var state = SignState.addTemplateRow(SignState.createSign(), null, parts, { templateId: 'station-name-vertical', widthRatio: 0.175 });
+      var exported = SignExporters.buildExportSVGString(state, measure, {});
+      var doc = new DOMParser().parseFromString(exported, 'image/svg+xml');
+      assert(!doc.querySelector('parsererror'), '竖排SVG导出合法');
+      assert(Array.from(doc.querySelectorAll('text')).some(function (text) { return text.textContent === content; }), '导出保留完整站名');
+    });
+
+    test('单侧站台分向导出只有左箭头、一个方向和右缘白色线号块', function () {
+      var elements = SignComposition.materialize('platform-direction-single', { lineColor: '#F7D917', lineColorMode: 'custom' }, measure);
+      var arrows = elements.filter(function (element) { return element.type === 'icon'; });
+      assertEqual(arrows.length, 1);
+      assertEqual(arrows[0].props.icon, 'arrow_left');
+      assertEqual(arrows[0].props.color, '#000000');
+      var state = SignState.addTemplateRow(SignState.createSign(), null, elements, { templateId: 'platform-direction-single', widthRatio: 6.25 });
+      var svg = SignExporters.buildExportSVGString(state, measure, {});
+      var doc = new DOMParser().parseFromString(svg, 'image/svg+xml');
+      assert(!doc.querySelector('parsererror'), '单侧SVG导出合法');
+      assertEqual(doc.documentElement.getAttribute('viewBox'), '0 0 1600 256');
+      var texts = Array.from(doc.querySelectorAll('text')).map(function (text) { return text.textContent; });
+      assert(texts.indexOf('璧山方向') !== -1 && texts.indexOf('To Bishan') !== -1 && texts.indexOf('1') !== -1);
+      assert(texts.indexOf('朝天门方向') === -1 && texts.indexOf('To Chaotianmen') === -1, '移除另一侧方向');
+      assert(elements.filter(function (element) { return element.type === 'plain-text'; }).every(function (element) { return element.props.color === '#000000'; }));
+    });
+
     // ─── 运行器 ────────────────────────────────────────
 
     function run() {

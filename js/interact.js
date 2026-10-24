@@ -608,16 +608,10 @@
 
     if (payload.kind === 'template' && typeof payload.templateId === 'string') {
       var template = global.SignCRT.get(payload.templateId);
-      var overrides = global.SignComposition.contextOverrides(template, App.state.context,
-        global.SignPanel.routeLinesSnapshot ? global.SignPanel.routeLinesSnapshot() : global.SignRoutes.list());
-      var fourSided = template.id === 'four-sided-guide' ? State.createFourSided(overrides) : null;
-      if (fourSided) overrides = Object.assign({}, overrides, { fourSidedEntries: fourSided.entries });
-      var templateElements = global.SignComposition.materialize(payload.templateId, overrides, App.measure);
+      var content = global.SignPanel.buildTemplateContent(payload.templateId);
+      var templateElements = content.elements;
       App.update(function (st) {
-        return global.SignWorkspace.addPreset(st, templateElements,
-          { name: template.name, templateId: template.id,
-            widthRatio: fourSided ? fourSided.referenceRowRatio / fourSided.entries.length : template.width / template.height, backgroundColor: overrides.backgroundColor,
-            fourSided: fourSided || undefined });
+        return global.SignWorkspace.addPreset(st, templateElements, content.options);
       });
       if (!App.state.context) {
         App.prefs.paletteCity = 'chongqing';

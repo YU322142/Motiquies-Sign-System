@@ -53,7 +53,7 @@
     };
     if (options) {
       var row = {};
-      ['widthRatio', 'referenceWidthRatio', 'templateId', 'route', 'fourSided', 'backgroundColor'].forEach(function (key) {
+      ['widthRatio', 'referenceWidthRatio', 'templateId', 'route', 'stationContext', 'fourSided', 'backgroundColor'].forEach(function (key) {
         if (options[key] !== undefined) row[key] = Core.deepClone(options[key]);
       });
       if (Object.keys(row).length) preset.row = row;

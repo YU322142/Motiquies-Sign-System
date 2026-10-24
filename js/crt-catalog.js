@@ -72,6 +72,9 @@
   guide('platform-direction-split', '岛式站台分向', 33, '4.1.10-1', title('璧山方向', 'To Bishan').concat(lineFields()).concat([field('destination', '另一侧方向', '朝天门方向'), field('destinationEn', '另一侧英文', 'To Chaotianmen')]),
     { variant: 'direction-split', background: '#E4002B', color: WHITE, width: 3600, height: 320,
       source: source(33, '4.1.10-1', '4.1.10', '正文未标总宽（两侧EQ等宽）；内容高由60+200+60得320，3600×320仅编辑用比例，不作为施工尺寸。') });
+  guide('platform-direction-single', '侧式站台分向（单侧）', 33, '4.1.10-1（单侧衍生）', title('璧山方向', 'To Bishan').concat(lineFields()),
+    { variant: 'direction-single', background: '#E4002B', color: WHITE, width: 2000, height: 320, directional: false,
+      source: source(33, '4.1.10-1（单侧衍生）', '4.1.10', '用户补充版式：保留岛式分向牌的左侧方向与白色线路号块，移除右侧方向。2000×320为编辑用比例，并非PDF另行规定的侧式施工尺寸。') });
   guide('platform-direction-multiline', '同站台多线分向', 33, '4.1.10-2', title('沙坪坝方向', 'To Shapingba').concat(lineFields('环/5', 'Loop Line / Line 5')).concat([
     field('destination', '另一侧方向', '大石坝方向'), field('destinationEn', '另一侧英文', 'To Dashiba'),
     field('leftQualifier', '左侧方向小标题', '内环'), field('leftQualifierEn', '左侧小标题英文', 'Clockwise Loop'),
@@ -256,7 +259,7 @@
   var BY_ID = Object.create(null);
   var LINE_COLORS = { '1': '#E4002B', '3': '#003DA5', '环': '#F2A900' };
   ALL.forEach(function (t) {
-    if (t.id === 'station-name' || t.id === 'station-name-vertical' || t.id === 'platform-direction-split') {
+    if (t.id === 'station-name' || t.id === 'station-name-vertical' || t.id === 'platform-direction-split' || t.id === 'platform-direction-single') {
       t.fields = t.fields.filter(function (f) { return f.key !== 'lineEn'; });
     }
     if (t.layout === 'guide' || t.layout === 'station' || t.layout === 'route') {
