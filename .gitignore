@@ -19,3 +19,4 @@ node_modules/
 
 # 不把宣传视频演示系统提交
 promo/
+tmp/

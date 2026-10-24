@@ -288,7 +288,9 @@
     var p = contentBox(el.props.padding, h);
     var s = p.size;
     var stripeW = s * STRIPE_RATIO;
-    var label = bilingualMetrics('号线', 'Line', s * LABEL_BOX_RATIO, m, false, s);
+    var labelZh = typeof el.props.labelZh === 'string' ? el.props.labelZh : '号线';
+    var labelEn = typeof el.props.labelEn === 'string' ? el.props.labelEn : 'Line';
+    var label = bilingualMetrics(labelZh, labelEn, s * LABEL_BOX_RATIO, m, false, s);
     var labelTop = p.t + label.zhBase - label.zhAscent; // 「号线」墨区顶
     var right = el.props.align === 'right';
     // 右对齐仅渲染第 1 条线路（现实导视中右置牌均为单线路）；数据保留，切回左对齐恢复
@@ -340,6 +342,7 @@
     });
     return {
       pad: p, size: s, stripeH: h - p.t, entries: entries, label: label,
+      labelZh: labelZh, labelEn: labelEn,
       labelAlign: labelAlign,
       labelX: labelX,
       stripeX: stripesX0,
@@ -404,6 +407,8 @@
   }
 
   function codeLabelMetrics(el, h, m, labelZh, labelEn, alignable) {
+    labelZh = typeof el.props.labelZh === 'string' ? el.props.labelZh : labelZh;
+    labelEn = typeof el.props.labelEn === 'string' ? el.props.labelEn : labelEn;
     var p = contentBox(el.props.padding, h);
     var s = p.size;
     var size = s * NUM_FONT_RATIO;
@@ -426,7 +431,7 @@
       // （codeW 含末位 M₃，此处不再叠加）
       var rightCodeX = p.l + label.width + trailingMargin;
       return {
-        pad: p, size: s, codeSize: size, codeW: codeW,
+        pad: p, size: s, codeSize: size, codeW: codeW, labelZh: labelZh, labelEn: labelEn,
         codeBase: codeBase,
         codeCenterX: rightCodeX + codeW / 2, // 编号移至标签右侧
         codeChars: codeChars, codeX: rightCodeX,
@@ -435,7 +440,7 @@
       };
     }
     return {
-      pad: p, size: s, codeSize: size, codeW: codeW,
+      pad: p, size: s, codeSize: size, codeW: codeW, labelZh: labelZh, labelEn: labelEn,
       codeBase: codeBase,
       codeCenterX: p.l + codeW / 2,
       codeChars: codeChars, codeX: p.l,
@@ -463,6 +468,36 @@
     return { pad: p, size: s, width: s + p.l + p.r };
   }
 
+  /** 单行文字以实际墨区左上角锚定；字号相对元素自身的局部行高。 */
+  function plainTextMetrics(el, h, measure) {
+    var props = el.props;
+    var pad = contentBox(props.padding || { top: 0, right: 0, bottom: 0, left: 0 }, h);
+    var font = props.font === 'en' ? Core.FONT_EN : props.font === 'num' ? Core.FONT_NUM : Core.FONT_ZH;
+    var ratio = Number.isFinite(props.fontSizeRatio) ? Math.max(0, props.fontSizeRatio) : 1;
+    var fontSize = Math.max(0.001, h * ratio);
+    var weight = props.bold ? 700 : 400;
+    var text = String(props.text == null ? '' : props.text).replace(/\r?\n/g, ' ');
+    var bounds = measure.ink(text, font, weight, fontSize);
+    var ascent = measure.ascent(text, font, weight, fontSize);
+    var descent = measure.descent ? measure.descent(text, font, weight, fontSize) : fontSize * 0.21;
+    var inkWidth = Math.max(0, bounds.abl + bounds.abr);
+    return { pad: pad, font: font, fontSize: fontSize, weight: weight, text: text,
+      x: pad.l + bounds.abl, base: pad.t + ascent, ascent: ascent, descent: descent,
+      inkWidth: inkWidth, inkHeight: ascent + descent, width: pad.l + inkWidth + pad.r };
+  }
+
+  function shapeMetrics(el, h) {
+    var props = el.props;
+    var pad = contentBox(props.padding || { top: 0, right: 0, bottom: 0, left: 0 }, h);
+    var source = Array.isArray(props.viewBox) ? props.viewBox : [0, 0, 100, 100];
+    var viewBox = [Number(source[0]) || 0, Number(source[1]) || 0,
+      Math.max(0.001, Number(source[2]) || 100), Math.max(0.001, Number(source[3]) || 100)];
+    var height = Math.max(0, pad.size);
+    var width = height * viewBox[2] / viewBox[3];
+    return { pad: pad, viewBox: viewBox, shapeWidth: width, shapeHeight: height,
+      width: pad.l + width + pad.r };
+  }
+
   var METRICS_FNS = {
     'arrow': arrowMetrics,
     'bilingual-text': bilingualTextMetrics,
@@ -473,6 +508,9 @@
     'exit': exitMetrics,
     'space': spaceMetrics,
     'icon': iconMetrics,
+    'plain-text': plainTextMetrics,
+    'shape': shapeMetrics,
+    'crt-sign': function (el, h, measure) { return global.SignCRTRender.metrics(el, h, measure); },
   };
 
   function elementMetrics(el, rowHeight, measure) {
@@ -485,7 +523,28 @@
     return elementMetrics(el, rowHeight, measure).width;
   }
 
+  /** A fragment is the same element and geometry used by the editor, without an ID or DOM. */
+  function measureFragment(type, props, rowHeight, measure) {
+    if (type === 'crt-sign' || !global.SignState.DEFAULT_PROPS[type]) {
+      throw new Error('不支持的基础元素片段: ' + type);
+    }
+    var defaults = Core.deepClone(global.SignState.DEFAULT_PROPS[type]);
+    var merged = Object.assign(defaults, props || {});
+    merged.padding = Object.assign({}, global.SignState.DEFAULT_PROPS[type].padding, props && props.padding);
+    var element = { type: type, props: merged };
+    var metrics = elementMetrics(element, rowHeight, measure);
+    return { element: element, metrics: metrics, width: metrics.width, height: rowHeight };
+  }
+
   function computeRowWidth(row, rowHeight, measure) {
+    if (Number.isFinite(row.widthRatio) && row.widthRatio > 0) return row.widthRatio * rowHeight;
+    if (row.layout === 'free') {
+      if (Number.isFinite(row.widthRatio) && row.widthRatio > 0) return row.widthRatio * rowHeight;
+      return row.elements.reduce(function (width, el) {
+        var box = el.props.box;
+        return box ? Math.max(width, (box.x + box.width) * rowHeight) : width;
+      }, 0);
+    }
     return row.elements.reduce(function (acc, el) {
       return acc + computeElementWidth(el, rowHeight, measure);
     }, 0);
@@ -494,11 +553,21 @@
   /** 动态宽度 = 最宽一行；全空时至少一个行高 */
   function computeSignWidth(sign, measure) {
     if (sign.widthMode === 'fixed') return sign.width;
-    var w = sign.rowHeight;
+    // A complete portrait CRT panel can be narrower than one row's height.
+    // Keep the historical minimum for the original element-based signs.
+    var hasPositioned = false;
+    var onlyPositioned = sign.rows.every(function (row) {
+      if (row.layout === 'free' || row.widthRatio > 0) { hasPositioned = true; return true; }
+      return row.elements.every(function (el) {
+        if (el.type === 'crt-sign') { hasPositioned = true; return true; }
+        return false;
+      });
+    });
+    var w = onlyPositioned && hasPositioned ? 1 : sign.rowHeight;
     for (var i = 0; i < sign.rows.length; i++) {
       w = Math.max(w, computeRowWidth(sign.rows[i], sign.rowHeight, measure));
     }
-    return Math.round(w);
+    return onlyPositioned && hasPositioned ? Math.ceil(w) : Math.round(w);
   }
 
   /** 元素对齐属性（left|center|right），非法/缺失一律视为贴左 */
@@ -513,8 +582,33 @@
    * 动态宽度模式一律左起排列。
    */
   function layoutRowElements(row, h, measure, signWidth, alignEnabled) {
+    if (row.layout === 'free') {
+      return row.elements.map(function (el) {
+        var box = el.props.box || { x: 0, y: 0, width: 1, height: 1 };
+        var width = Math.max(0, box.width * h), height = Math.max(0, box.height * h);
+        var localHeight = Math.max(0.001, height);
+        var mt = elementMetrics(el, localHeight, measure);
+        var scale = height > 0 ? Math.min(1, width / Math.max(mt.width, 0.001)) : 0;
+        return { id: el.id, x: box.x * h, y: box.y * h, width: width, height: height,
+          scale: scale, naturalWidth: mt.width, localHeight: localHeight, metrics: mt,
+          offsetX: Math.max(0, (width - mt.width * scale) / 2) };
+      });
+    }
+    if (row.widthRatio > 0) {
+      var rowWidth = row.widthRatio * h;
+      var fragments = row.elements.map(function (el) { return elementMetrics(el, h, measure); });
+      var total = fragments.reduce(function (sum, mt) { return sum + mt.width; }, 0);
+      var fit = Math.min(1, rowWidth / Math.max(total, 0.001));
+      var xx = 0;
+      return fragments.map(function (mt, i) {
+        var slot = { id: row.elements[i].id, x: xx, y: 0, width: mt.width * fit, height: h,
+          scale: fit, naturalWidth: mt.width, localHeight: h, metrics: mt };
+        xx += slot.width;
+        return slot;
+      });
+    }
     var slots = row.elements.map(function (el) {
-      return { id: el.id, width: computeElementWidth(el, h, measure) };
+      return { id: el.id, y: 0, height: h, scale: 1, width: computeElementWidth(el, h, measure) };
     });
     var centerTotal = 0;
     var i, a;
@@ -550,8 +644,11 @@
     var alignEnabled = sign.widthMode === 'fixed';
     var rows = sign.rows.map(function (row, ri) {
       var elements = layoutRowElements(row, h, measure, width, alignEnabled);
-      var contentWidth = elements.reduce(function (acc, s) { return acc + s.width; }, 0);
-      return { id: row.id, y: ri * h, height: h, elements: elements, contentWidth: contentWidth };
+      var free = row.layout === 'free';
+      var contentWidth = free || row.widthRatio > 0 ? computeRowWidth(row, h, measure) :
+        elements.reduce(function (acc, s) { return acc + s.width; }, 0);
+      return { id: row.id, y: ri * h, height: h, layout: free ? 'free' : 'flow',
+        elements: elements, contentWidth: contentWidth };
     });
     return { width: width, height: height, rows: rows };
   }
@@ -669,7 +766,7 @@
         }));
       });
     });
-    drawBilingualBox(g, '号线', 'Line', mt.label, mt.labelX, mt.pad.t, el.props.textColor, mt.labelAlign, 0);
+    drawBilingualBox(g, mt.labelZh, mt.labelEn, mt.label, mt.labelX, mt.pad.t, el.props.textColor, mt.labelAlign, 0);
   }
 
   function drawTextLine(g, el, mt) {
@@ -697,6 +794,8 @@
   }
 
   function drawCodeLabel(g, el, mt, labelZh, labelEn) {
+    labelZh = mt.labelZh;
+    labelEn = mt.labelEn;
     // 多位编号逐字按墨区坐标绘制；单字符整串居中
     if (mt.codeChars.length) {
       mt.codeChars.forEach(function (d) {
@@ -726,16 +825,42 @@
 
   function drawSpace() { /* 空白占位，无可见内容 */ }
 
+  function drawPlainText(g, el, mt) {
+    g.appendChild(mkText(mt.text, { x: mt.x, y: mt.base, 'font-family': mt.font,
+      'font-size': mt.fontSize, 'font-weight': mt.weight, fill: el.props.color || '#000000' }));
+  }
+
+  function drawShape(g, el, mt) {
+    var props = el.props;
+    var kind = ['rect', 'circle', 'line', 'path', 'polygon'].indexOf(props.shape) !== -1 ? props.shape : 'rect';
+    var nested = mk('svg', { x: mt.pad.l, y: mt.pad.t, width: mt.shapeWidth, height: mt.shapeHeight,
+      viewBox: mt.viewBox.join(' '), preserveAspectRatio: 'none', overflow: 'visible' });
+    var attrs = {};
+    var geometry = props.geometry || {};
+    ['x', 'y', 'width', 'height', 'cx', 'cy', 'r', 'rx', 'ry', 'x1', 'y1', 'x2', 'y2',
+      'd', 'points', 'stroke-dasharray', 'stroke-linecap', 'stroke-linejoin'].forEach(function (name) {
+      if (geometry[name] !== undefined && geometry[name] !== null) attrs[name] = geometry[name];
+    });
+    attrs.fill = props.fill || 'none';
+    attrs.stroke = props.stroke || 'none';
+    attrs['stroke-width'] = props.strokeWidth || 0;
+    nested.appendChild(mk(kind, attrs));
+    g.appendChild(nested);
+  }
+
   function drawIcon(g, el, mt) {
     var lib = global.SignIcons;
     if (!HAS_DOM || !lib) return;
-    var icon = lib.get(el.props.icon);
+    var id = el.props.icon;
+    var icon = Object.prototype.hasOwnProperty.call(lib.ALL, id) ? lib.get(id) :
+      (global.SignCRTSymbols && global.SignCRTSymbols.get(id)) || lib.get(id);
     var color = el.props.color || '#000000';
     var nested = mk('svg', {
       x: mt.pad.l, y: mt.pad.t, width: mt.size, height: mt.size,
       viewBox: icon.vb, preserveAspectRatio: 'xMidYMid meet',
     });
-    nested.innerHTML = icon.body.replace(/fill="black"/g, 'fill="' + color + '"');
+    nested.innerHTML = icon.body.replace(/(fill|stroke)="(?:black|#000000|#000)"/gi,
+      function (_, attr) { return attr + '="' + color + '"'; });
     g.appendChild(nested);
   }
 
@@ -749,7 +874,19 @@
     'exit': drawExit,
     'space': drawSpace,
     'icon': drawIcon,
+    'plain-text': drawPlainText,
+    'shape': drawShape,
+    'crt-sign': function (g, el, mt) { global.SignCRTRender.draw(g, el, mt); },
   };
+
+  /** Draw exactly the supplied geometry; templates never remeasure their child elements. */
+  function drawMeasuredElement(g, el, mt, rowHeight) {
+    if (el.props.backgroundColor) {
+      g.appendChild(mk('rect', { x: 0, y: 0, width: Math.ceil(Math.max(mt.width, 1)),
+        height: rowHeight, fill: el.props.backgroundColor }));
+    }
+    (DRAW_FNS[el.type] || drawSpace)(g, el, mt);
+  }
 
   /**
    * 渲染单个元素为 <g>（局部坐标）。clean=true 时不带编辑器属性与命中框（用于导出/缩略图）。
@@ -760,17 +897,23 @@
     if (!opts.clean) {
       g.setAttribute('data-element-id', el.id);
     }
-    var mt = elementMetrics(el, rowHeight, measure);
+    var slot = opts.slot;
+    var mt = slot ? slot.metrics : elementMetrics(el, rowHeight, measure);
+    if (slot) {
+      var content = mk('g', { transform: 'translate(' + (slot.offsetX || 0) + ' ' + ((slot.height - slot.localHeight * slot.scale) / 2) +
+        ') scale(' + slot.scale + ')' });
+      drawMeasuredElement(content, el, mt, slot.localHeight);
+      g.appendChild(content);
+      if (!opts.clean) g.appendChild(mk('rect', { class: 'hitbox', x: 0, y: 0,
+        width: slot.width, height: slot.height, fill: 'transparent', 'pointer-events': 'all' }));
+      return { node: g, width: slot.width, height: slot.height };
+    }
     var w = Math.max(mt.width, 1);
     // 背景与命中框宽度向上取整：与相邻元素的取整平移相互覆盖，
     // 消除同色背景元素之间的亚像素透明缝
     var boxW = Math.ceil(w);
     // 元素背景色（含 padding 区，覆盖整个元素盒）
-    var bg = el.props.backgroundColor;
-    if (bg) {
-      g.appendChild(mk('rect', { x: 0, y: 0, width: boxW, height: rowHeight, fill: bg }));
-    }
-    (DRAW_FNS[el.type] || drawSpace)(g, el, mt);
+    drawMeasuredElement(g, el, mt, rowHeight);
     if (!opts.clean) {
       g.appendChild(mk('rect', {
         class: 'hitbox', x: 0, y: 0, width: boxW, height: rowHeight,
@@ -816,11 +959,18 @@
       var rowLayout = layout.rows[ri];
       var rowG = mk('g', { class: 'sign-row' });
       if (!options.clean) rowG.setAttribute('data-row-id', row.id);
+      if (row.backgroundColor) rowG.appendChild(mk('rect', { x: 0, y: rowLayout.y,
+        width: rowLayout.contentWidth, height: sign.rowHeight, fill: row.backgroundColor, 'pointer-events': 'none' }));
       for (var ei = 0; ei < row.elements.length; ei++) {
         var el = row.elements[ei];
-        var rendered = renderElement(el, sign.rowHeight, measure, { clean: options.clean });
+        var slot = rowLayout.elements[ei];
+        var free = row.layout === 'free';
+        var fitted = free || row.widthRatio > 0;
+        var rendered = renderElement(el, fitted ? slot.height : sign.rowHeight, measure,
+          { clean: options.clean, slot: fitted ? slot : null });
         // 平移向下取整：相邻元素背景边界落在整数像素上，避免抗锯齿透明缝
-        rendered.node.setAttribute('transform', 'translate(' + Math.floor(rowLayout.elements[ei].x) + ',' + rowLayout.y + ')');
+        rendered.node.setAttribute('transform', 'translate(' + (fitted ? slot.x : Math.floor(slot.x)) + ',' +
+          (rowLayout.y + (fitted ? slot.y : 0)) + ')');
         if (options.selectedElementId === el.id) {
           rendered.node.setAttribute('class', 'element selected');
         }
@@ -866,13 +1016,18 @@
     NUM_ASC: NUM_ASC,
     STRIPE_RATIO: STRIPE_RATIO,
     contentBox: contentBox,
+    plainTextMetrics: plainTextMetrics,
+    shapeMetrics: shapeMetrics,
     arrowGeometry: arrowGeometry,
     bilingualMetrics: bilingualMetrics,
     bilingualAlignX: bilingualAlignX,
     elementMetrics: elementMetrics,
+    measureFragment: measureFragment,
+    drawMeasuredElement: drawMeasuredElement,
     computeElementWidth: computeElementWidth,
     computeRowWidth: computeRowWidth,
     computeSignWidth: computeSignWidth,
+    layoutRowElements: layoutRowElements,
     layoutSign: layoutSign,
     renderElement: renderElement,
     renderSignInto: renderSignInto,

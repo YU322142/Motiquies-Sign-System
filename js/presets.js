@@ -43,14 +43,22 @@
   }
 
   /** 将一行的元素保存为预设（深拷贝快照） */
-  function save(name, elements) {
+  function save(name, elements, options) {
     var items = list();
-    items.push({
+    var preset = {
       id: Core.uuid(),
       name: name,
       createdAt: Date.now(),
       elements: Core.deepClone(elements),
-    });
+    };
+    if (options) {
+      var row = {};
+      ['widthRatio', 'referenceWidthRatio', 'templateId', 'route', 'fourSided', 'backgroundColor'].forEach(function (key) {
+        if (options[key] !== undefined) row[key] = Core.deepClone(options[key]);
+      });
+      if (Object.keys(row).length) preset.row = row;
+    }
+    items.push(preset);
     persist(items);
   }
 
@@ -68,15 +76,7 @@
   function materialize(id) {
     var p = get(id);
     if (!p) return null;
-    return p.elements
-      .filter(function (el) { return State.ELEMENT_TYPES.indexOf(el.type) !== -1; })
-      .map(function (el) {
-        return {
-          id: Core.uuid(),
-          type: el.type,
-          props: Core.deepClone(el.props || {}),
-        };
-      });
+    return State.cloneElements(p.elements);
   }
 
   function onChange(fn) { listeners.push(fn); }

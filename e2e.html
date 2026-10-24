@@ -36,6 +36,14 @@
     function $(sel) { return frame.contentDocument.querySelector(sel); }
     function $$(sel) { return Array.prototype.slice.call(frame.contentDocument.querySelectorAll(sel)); }
     function W() { return frame.contentWindow; }
+    function boards() { return W().SignWorkspace.list(W().App.state); }
+    function workspaceRow(id) {
+      return boards().reduce(function (rows, board) { return rows.concat(board.sign.rows); }, [])
+        .filter(function (row) { return row.id === id; })[0];
+    }
+    function basicChips() { return $$('[data-palette-pane="basic"] .palette-chip'); }
+    function paletteTab(id) { $('[data-palette-tab="' + id + '"]').click(); }
+    function signSection(id) { $('[data-sign-section="' + id + '"]').click(); }
 
     function rectOf(el) {
       var r = el.getBoundingClientRect();
@@ -158,6 +166,8 @@
       w.App.select(null);
       w.App.previewPreset(null);
       w.App.renderAll();
+      signSection('horizontal');
+      paletteTab('basic');
     }
 
     function s01_selectAndPanel() {
@@ -250,11 +260,13 @@
       await modalAct('ok');
       var presets = w.SignPresets.list();
       ok('S06 预设已保存', presets.length === 1 && presets[0].name === '测试行');
+      paletteTab('presets');
       ok('S06 左栏出现预设卡片', $$('.preset-card').length === 1 && $$('.preset-card .preset-thumb svg').length === 1);
       // 删除预设（卡片 ✕）
       $('.preset-delete').click();
       await modalAct('ok');
       ok('S06 预设可删除', w.SignPresets.list().length === 0);
+      paletteTab('basic');
     }
 
     function s07_presetPreviewAndDrop() {
@@ -262,6 +274,7 @@
       // 重新存一个预设
       P.save('落牌预设', [S.createElement('arrow', { direction: 'up' }), S.createElement('space', { widthRatio: 0.3 })]);
       w.App.renderAll();
+      paletteTab('presets');
       // 点击卡片 → 预览面板
       $$('.preset-card')[0].click();
       ok('S07 点击预设 → 右栏预览', $('#right-panel-title').textContent === '预设预览');
@@ -271,8 +284,10 @@
       var dataTransfer = new w.DataTransfer();
       dataTransfer.setData(w.SignInteract.MIME_PRESET, JSON.stringify({ kind: 'preset', id: P.list()[0].id }));
       var wrap = $('#canvas-wrap');
-      // 目标：添加一个空行并放入
+      // 完整个人预设创建独立牌，落点不覆盖现有行。
       w.App.update(S.addRow);
+      var originalBoardId = boards()[0].id;
+      var originalBoard = JSON.stringify(w.App.state.rows);
       var emptyRowIndex = w.App.state.rows.length - 1;
       var band = $('.row-band[data-row-index="' + emptyRowIndex + '"]');
       var br = band.getBoundingClientRect();
@@ -281,21 +296,27 @@
       ok('S07 空行显示可放置高亮', band.classList.contains('drop-ok'));
       var ev2 = new w.DragEvent('drop', { dataTransfer: dataTransfer, clientX: br.left + 100, clientY: br.top + br.height / 2, bubbles: true, cancelable: true });
       wrap.dispatchEvent(ev2);
-      var target = w.App.state.rows[emptyRowIndex];
-      ok('S07 预设落入空行（元素替换）', target.elements.length === 2 && target.elements[0].props.direction === 'up',
+      var target = w.App.state.rows[0];
+      ok('S07 预设拖入创建独立牌并保留原行', boards().length === 2 && target.elements.length === 2 && target.elements[0].props.direction === 'up' &&
+        JSON.stringify(boards().filter(function (board) { return board.id === originalBoardId; })[0].sign.rows) === originalBoard,
         'len=' + target.elements.length);
 
-      // 有元素的行 → drop-invalid 且不替换
+      // 既有牌面上再拖入也创建新牌，不替换其元素。
       var dataTransfer2 = new w.DataTransfer();
       dataTransfer2.setData(w.SignInteract.MIME_PRESET, JSON.stringify({ kind: 'preset', id: P.list()[0].id }));
       var band0 = $('.row-band[data-row-index="0"]');
       var b0 = band0.getBoundingClientRect();
       wrap.dispatchEvent(new w.DragEvent('dragover', { dataTransfer: dataTransfer2, clientX: b0.left + 100, clientY: b0.top + b0.height / 2, bubbles: true, cancelable: true }));
-      ok('S07 非空行显示禁止放置', band0.classList.contains('drop-invalid'));
+      ok('S07 完整预设可从非空牌面添加新牌', band0.classList.contains('drop-ok'));
       var row0Before = w.App.state.rows[0].elements.map(function (e) { return e.id; });
+      var previousBoardId = w.App.state.workspace.activeId;
       wrap.dispatchEvent(new w.DragEvent('drop', { dataTransfer: dataTransfer2, clientX: b0.left + 100, clientY: b0.top + b0.height / 2, bubbles: true, cancelable: true }));
-      ok('S07 非空行释放无效', w.App.state.rows[0].elements.map(function (e) { return e.id; }).join() === row0Before.join());
+      ok('S07 非空牌面拖入保留旧牌并使用独立元素', boards().length === 3 &&
+        boards().filter(function (board) { return board.id === previousBoardId; })[0].sign.rows[0].elements.map(function (e) { return e.id; }).join() === row0Before.join() &&
+        w.App.state.rows[0].elements.every(function (e) { return row0Before.indexOf(e.id) === -1; }));
+      w.App.update(function (sign) { return w.SignWorkspace.select(sign, originalBoardId); });
       localStorage.removeItem('sign-presets');
+      paletteTab('basic');
     }
 
     function s08_paletteDropNewElement() {
@@ -611,7 +632,12 @@
       ok('S23 图标元素已添加', last.type === 'icon');
       w.App.select(last.id);
       var iconBtns = $$('#right-panel-body .icon-pick');
-      ok('S23 图标选择器仅列服务设施（含出口三向变体）', iconBtns.length === 19, 'n=' + iconBtns.length);
+      var directionNames = Object.keys(w.SignIcons.ALL).filter(function (id) {
+        return /^arrow_/.test(id);
+      }).map(function (id) { return w.SignIcons.ALL[id].name; });
+      ok('S23 服务图标含新增标准符号且排除方向图标',
+        iconBtns.length > 19 && iconBtns.some(function (b) { return b.title === w.SignCRTSymbols.get('no_smoking').name; }) &&
+        iconBtns.every(function (b) { return directionNames.indexOf(b.title) === -1; }), 'n=' + iconBtns.length);
       ok('S23 出口三向变体均在选择器中', ['出口', '出口（向左）', '出口（向右）'].every(function (t) {
         return iconBtns.some(function (b) { return b.title === t; });
       }));
@@ -1207,17 +1233,17 @@
       // 布局/事件可能被节流推迟，这里补发 resize 直达应用的断点检查
       W().dispatchEvent(new (W().Event)('resize'));
       var switched = await waitFor(function () {
-        return w.App.isMobileView() && $$('.palette-chip').length === 7;
+        return w.App.isMobileView() && basicChips().length === w.SignPanel.categoryCount();
       }, 6000);
-      ok('S38 窄视口进入移动布局（6 分类 + 预设 chip）', switched,
-        'mobile=' + w.App.isMobileView() + ' chips=' + $$('.palette-chip').length);
+      ok('S38 窄视口进入移动布局（基础分类独立于组合预设）', switched,
+        'mobile=' + w.App.isMobileView() + ' chips=' + basicChips().length);
 
       // chip 切换分类重渲染卡片条
-      $$('.palette-chip')[3].click(); // 文本（1 张卡片）
-      var textCards = await waitFor(function () { return $$('.palette-strip .palette-card').length === 1; });
+      basicChips()[3].click(); // 文本（1 张卡片）
+      var textCards = await waitFor(function () { return $$('[data-palette-pane="basic"] .palette-strip .palette-card').length === 1; });
       ok('S38 chip 切换分类重渲染卡片条', textCards &&
-        $$('.palette-chip')[3].classList.contains('active'));
-      $$('.palette-chip')[0].click(); // 回方向指示
+        basicChips()[3].classList.contains('active'));
+      basicChips()[0].click(); // 回方向指示
 
       // 行控件外置：行带内不再有手柄/按钮（防与元素叠加），改由下方行条承接
       ok('S38 行带内无手柄与按钮（不与元素叠加）',
@@ -1236,7 +1262,7 @@
       ok('S38 行条 ▲ 上移恢复', w.App.state.rows[0].id === firstRowId);
 
       // 移动端禁用卡片原生拖拽（回归：触屏长按唤起原生拖拽 → 卡片置灰、页面卡死）
-      var mCard = $$('.palette-strip .palette-card')[0];
+      var mCard = $$('[data-palette-pane="basic"] .palette-strip .palette-card')[0];
       ok('S38 移动端卡片 draggable=false', mCard.getAttribute('draggable') === 'false',
         'draggable=' + mCard.getAttribute('draggable'));
       var dEv = new w.DragEvent('dragstart', { bubbles: true, cancelable: true, dataTransfer: new w.DataTransfer() });
@@ -1249,7 +1275,7 @@
       $('#right-collapse').click();
       ok('S38 底部属性带可折叠', $('#right-panel').classList.contains('band-collapsed'));
       var rowsBefore = w.App.state.rows[w.App.state.rows.length - 1].elements.length;
-      $$('.palette-strip .palette-card')[0].click();
+      $$('[data-palette-pane="basic"] .palette-strip .palette-card')[0].click();
       var selected = await waitFor(function () { return w.App.selection.elementId !== null; });
       var rowAfter = w.App.state.rows[w.App.state.rows.length - 1];
       ok('S38 移动端点击卡片 → 添加并自动选中',
@@ -1302,7 +1328,7 @@
       frameEl.style.width = '1280px';
       W().dispatchEvent(new (W().Event)('resize'));
       var restored = await waitFor(function () {
-        return !w.App.isMobileView() && $$('.palette-category').length === 7;
+        return !w.App.isMobileView() && $$('[data-palette-pane="basic"] .palette-category').length === w.SignPanel.categoryCount();
       }, 6000);
       ok('S38 回宽视口恢复桌面 palette 且无移动态残留', restored &&
         !$('#right-panel').classList.contains('band-collapsed') &&
@@ -1324,10 +1350,10 @@
       frameEl.style.width = '375px';
       W().dispatchEvent(new (W().Event)('resize'));
       var switched = await waitFor(function () {
-        return w.App.isMobileView() && $$('.palette-chip').length === 7;
+        return w.App.isMobileView() && basicChips().length === w.SignPanel.categoryCount();
       }, 6000);
       ok('S39 窄视口进入移动布局', switched,
-        'mobile=' + w.App.isMobileView() + ' chips=' + $$('.palette-chip').length);
+        'mobile=' + w.App.isMobileView() + ' chips=' + basicChips().length);
       if (!switched) return;
 
       var S = w.SignState;
@@ -1385,7 +1411,7 @@
       frameEl.style.width = '1280px';
       W().dispatchEvent(new (W().Event)('resize'));
       var restored = await waitFor(function () {
-        return !w.App.isMobileView() && $$('.palette-category').length === 7;
+        return !w.App.isMobileView() && $$('[data-palette-pane="basic"] .palette-category').length === w.SignPanel.categoryCount();
       }, 6000);
       ok('S39 回宽视口恢复桌面布局', restored, 'mobile=' + w.App.isMobileView());
     }
@@ -1399,49 +1425,50 @@
       frameEl.style.width = '375px';
       W().dispatchEvent(new (W().Event)('resize'));
       var switched = await waitFor(function () {
-        return w.App.isMobileView() && $$('.palette-chip').length === 7;
+        return w.App.isMobileView() && basicChips().length === w.SignPanel.categoryCount();
       }, 6000);
       ok('S40 窄视口进入移动布局', switched,
-        'mobile=' + w.App.isMobileView() + ' chips=' + $$('.palette-chip').length);
+        'mobile=' + w.App.isMobileView() + ' chips=' + basicChips().length);
       if (!switched) return;
 
-      function chipRow() { return $('.palette-chips'); }
+      function chipRow() { return $('[data-palette-pane="basic"] .palette-chips'); }
       // 前置条件：chip 行确实可横向滑动（否则本用例无意义）
       var row = chipRow();
       ok('S40 chip 行可横向滑动（前置条件）', row.scrollWidth > row.clientWidth + 20,
         'scrollWidth=' + row.scrollWidth + ' clientWidth=' + row.clientWidth +
         ' viewport=' + W().innerWidth);
 
-      // 滑到最右端（末位「预设」chip 进入视口）
+      // 滑到最右端（末位基础元素分类进入视口）
       row.scrollLeft = row.scrollWidth;
       var before = chipRow().scrollLeft;
       ok('S40 chip 行已滑到右端', before > 20, 'scrollLeft=' + before);
 
       // 点选最右侧分类 chip → 触发卡片条重建
       var rowNode = chipRow();
-      var chipNode = $$('.palette-chip')[6];
+      var lastCategory = w.SignPanel.categoryCount() - 1;
+      var chipNode = basicChips()[lastCategory];
       chipNode.click();
       ok('S40 点选末位分类 chip 生效（卡片条已切换）',
-        $$('.palette-chip')[6].classList.contains('active'));
+        basicChips()[lastCategory].classList.contains('active'));
 
       // chip 行结构不随分类变化：同一 DOM 节点原地保留（滑动惯性/焦点不被打断）
       ok('S40 切换分类不重建 chip 行（节点原地保留）',
-        chipRow() === rowNode && $$('.palette-chip')[6] === chipNode,
-        'rowSame=' + (chipRow() === rowNode) + ' chipSame=' + ($$('.palette-chip')[6] === chipNode));
+        chipRow() === rowNode && basicChips()[lastCategory] === chipNode,
+        'rowSame=' + (chipRow() === rowNode) + ' chipSame=' + (basicChips()[lastCategory] === chipNode));
 
       var after = chipRow().scrollLeft;
       ok('S40 切换分类后 chip 行滑动位置保持', Math.abs(after - before) <= 2,
         'before=' + before + ' after=' + after);
 
       // 用户症状：刚点中的分类 chip 仍在可视区内（未被弹回左侧挤出视口）
-      var chipR = rectOf($$('.palette-chip')[6]);
+      var chipR = rectOf(basicChips()[lastCategory]);
       var rowR = rectOf(chipRow());
       ok('S40 被点选分类 chip 仍在 chip 行视口内',
         chipR.x >= rowR.x - 0.5 && chipR.x + chipR.w <= rowR.x + rowR.w + 0.5,
         'chip=' + (chipR.x + '..' + (chipR.x + chipR.w)) + ' row=' + (rowR.x + '..' + (rowR.x + rowR.w)));
 
       // 同一分类重复点选不重建，滑动位置同样不受影响
-      $$('.palette-chip')[6].click();
+      basicChips()[lastCategory].click();
       ok('S40 重复点选同分类不动滑动位置', Math.abs(chipRow().scrollLeft - before) <= 2,
         'scrollLeft=' + chipRow().scrollLeft);
 
@@ -1451,13 +1478,1229 @@
         Math.abs(chipRow().scrollLeft - before) <= 2, 'scrollLeft=' + chipRow().scrollLeft);
 
       // 回方向指示分类；还原桌面视口
-      $$('.palette-chip')[0].click();
+      basicChips()[0].click();
       frameEl.style.width = '1280px';
       W().dispatchEvent(new (W().Event)('resize'));
       var restored = await waitFor(function () {
-        return !w.App.isMobileView() && $$('.palette-category').length === 7;
+        return !w.App.isMobileView() && $$('[data-palette-pane="basic"] .palette-category').length === w.SignPanel.categoryCount();
       }, 6000);
       ok('S40 回宽视口恢复桌面布局', restored, 'mobile=' + w.App.isMobileView());
+    }
+
+    async function s41_crtLibrary() {
+      var w = W(), S = w.SignState;
+      w.App.select(null);
+      w.App.update(function () { return S.createSign(); });
+      signSection('vertical');
+      paletteTab('templates');
+      var search = $('.crt-toolbar input');
+      search.value = '站名';
+      search.dispatchEvent(new w.Event('input', { bubbles: true }));
+      ok('S41 竖牌组合预设支持搜索', $$('.crt-grid .palette-card').length > 0 &&
+        $$('.crt-grid .palette-card').every(function (c) { return (c.textContent + c.dataset.group).indexOf('站名') !== -1; }));
+      search.value = '';
+      search.dispatchEvent(new w.Event('input', { bubbles: true }));
+      $('[data-template-id="station-name"]').click();
+      var row = w.App.state.rows[0];
+      var el = row.elements.filter(function (item) { return item.type === 'plain-text' && item.props.text === '08'; })[0];
+      ok('S41 点击组合预设生成 free 行和独立基础元素', row.layout === 'free' && row.elements.length > 2 &&
+        row.elements.every(function (item) { return item.type !== 'crt-sign' && item.props.box; }) && w.App.state.widthMode === 'dynamic');
+      w.App.select(el.id);
+      var text = $('[aria-label="文字内容"]');
+      var size = $('[aria-label="字号比例"]');
+      var panelNode = $('#right-panel-body').firstChild;
+      text.value = '09';
+      text.dispatchEvent(new w.Event('input', { bubbles: true }));
+      size.value = '1.1';
+      size.dispatchEvent(new w.Event('change', { bubbles: true }));
+      var current = S.findElement(w.App.state, el.id).element;
+      ok('S41 连续编辑文字与字号不回滚且保留表单节点', current.props.text === '09' &&
+        current.props.fontSizeRatio === 1.1 && $('#right-panel-body').firstChild === panelNode);
+      ok('S41 基础文字在真实 SVG 中实时更新', $('#sign-svg').textContent.indexOf('09') !== -1);
+      ok('S41 窄竖牌动态宽度无多余空白', w.App.layout.width === Math.ceil(w.App.state.rowHeight * 0.75));
+      var restored = S.deserializeSign(S.serializeSign(w.App.state));
+      ok('S41 JSON 往返保留基础元素编辑与 free 定位', restored.rows[0].layout === 'free' &&
+        S.findElement(restored, el.id).element.props.text === '09' &&
+        JSON.stringify(S.findElement(restored, el.id).element.props.box) === JSON.stringify(current.props.box));
+      w.SignPresets.save('S41 重庆组合', w.App.state.rows[0].elements);
+      var saved = w.SignPresets.list().filter(function (p) { return p.name === 'S41 重庆组合'; }).pop();
+      var copied = w.SignPresets.materialize(saved.id).filter(function (item) { return item.type === 'plain-text' && item.props.text === '09'; })[0];
+      ok('S41 个人预设保留基础元素定位并生成独立 id', copied.id !== el.id &&
+        JSON.stringify(copied.props.box) === JSON.stringify(current.props.box));
+      w.SignPresets.remove(saved.id);
+      var svg = w.SignExporters.buildExportSVGString(restored, w.App.measure, {});
+      var doc = new w.DOMParser().parseFromString(svg, 'image/svg+xml');
+      ok('S41 基础组合导出保留 SVG 文字和自包含图形', !doc.querySelector('parsererror') &&
+        doc.querySelector('text') && !doc.querySelector('image, script, foreignObject') && doc.documentElement.textContent.indexOf('09') !== -1);
+      // 组合预设拖放携带 recipe id，新建独立牌面，保留已有标识。
+      var originalIds = w.App.state.rows[0].elements.map(function (item) { return item.id; }).join();
+      var eventData = new w.DataTransfer();
+      eventData.setData(w.SignInteract.MIME_TEMPLATE, JSON.stringify({ kind: 'template', templateId: 'route-vertical' }));
+      var svgRect = $('#sign-svg').getBoundingClientRect();
+      var wrap = $('#canvas-wrap');
+      ['dragover', 'drop'].forEach(function (kind) {
+        wrap.dispatchEvent(new w.DragEvent(kind, { bubbles: true, cancelable: true,
+          clientX: svgRect.right - 1, clientY: svgRect.top + svgRect.height / 2, dataTransfer: eventData }));
+      });
+      ok('S41 拖入组合预设新增独立牌并保留已有元素', boards().length === 2 && w.App.state.rows.length === 1 &&
+        workspaceRow(row.id).elements.map(function (item) { return item.id; }).join() === originalIds &&
+        w.App.state.rows[0].layout === 'free' && w.App.state.rows[0].elements.every(function (item) { return item.type !== 'crt-sign'; }) &&
+        $('#sign-svg').textContent.indexOf('两路口') !== -1);
+      frame.style.width = '375px';
+      w.dispatchEvent(new w.Event('resize'));
+      await waitFor(function () { return w.App.isMobileView(); });
+      signSection('route');
+      paletteTab('templates');
+      ok('S41 移动端通过牌型入口访问组合预设与筛选', ! $('[data-palette-pane="templates"]').hidden &&
+        !!$('.crt-toolbar input') && $$('[data-palette-pane="templates"] .palette-strip [data-template-id]').length > 0);
+      frame.style.height = '568px';
+      w.dispatchEvent(new w.Event('resize'));
+      await new Promise(function (resolve) { setTimeout(resolve, 250); });
+      ok('S41 小屏编辑区保留可用高度', $('#canvas-scroll').getBoundingClientRect().height >= 140,
+        'height=' + $('#canvas-scroll').getBoundingClientRect().height);
+      frame.style.height = '860px';
+      frame.style.width = '1280px';
+      w.dispatchEvent(new w.Event('resize'));
+      await waitFor(function () { return !w.App.isMobileView(); });
+      signSection('horizontal');
+      paletteTab('basic');
+    }
+
+    async function s42_primitivePresets() {
+      var w = W(), S = w.SignState, C = w.SignComposition;
+      paletteTab('templates');
+      var sections = ['horizontal', 'vertical', 'route', 'safety'];
+      var seen = {}, basicSets = {}, navNode = $('[data-sign-section="horizontal"]'), searchNode = $('.crt-toolbar input');
+      var representative = { horizontal: 'concourse-exit', vertical: 'station-name', route: 'route-vertical',
+        safety: 'no-smoking' };
+      ok('S42 四种在用牌型均有独立入口且无时刻表入口', sections.every(function (id) { return !!$('[data-sign-section="' + id + '"]'); }) &&
+        !$('[data-sign-section="timetable"]'));
+      sections.forEach(function (id) {
+        signSection(id);
+        var cards = $$('.crt-grid [data-template-id]');
+        ok('S42 ' + id + ' 仅显示本牌型组合预设', cards.some(function (card) { return card.dataset.templateId === representative[id]; }) && cards.every(function (card) {
+          var template = w.SignCRT.get(card.dataset.templateId);
+          seen[template.id] = true;
+          return C.sectionFor(template) === id;
+        }));
+        paletteTab('basic');
+        basicSets[id] = $$('[data-palette-pane="basic"] .card-name').map(function (node) { return node.textContent; }).join('|');
+        paletteTab('templates');
+      });
+      ok('S42 四牌型完整覆盖全部 81 款且移除停用预设', Object.keys(seen).length === 81 &&
+        ['first-last-train', 'interconnection-timetable', 'network-map', 'network-map-double', 'street-map', 'evacuation-map',
+          'entrance-identity', 'gate-indicator', 'fare-information'].every(function (id) { return !seen[id]; }) &&
+        $('[data-sign-section="horizontal"]') === navNode && $('.crt-toolbar input') === searchNode);
+      ok('S42 四种牌型提供各自适用的基础元素分组', Object.keys(basicSets).every(function (id) { return basicSets[id].length > 0; }) &&
+        sections.filter(function (id, index) { return sections.slice(0, index).every(function (prior) { return basicSets[id] !== basicSets[prior]; }); }).length === 4);
+      ok('S42 真实字体下全部标准标识均由基础元素构成', w.SignCRT.ALL.every(function (template) {
+        var elements = C.materialize(template.id, undefined, w.App.measure);
+        return elements.length > 0 && elements.every(function (el) { return el.type !== 'crt-sign'; });
+      }));
+
+      w.App.select(null);
+      w.App.update(function () { return S.updateSignSettings(S.createSign(), { rowHeight: 400 }); });
+      signSection('vertical');
+      $('[data-template-id="station-name"]').click();
+      await waitFor(function () { return $('#sign-svg').getBoundingClientRect().height > 200; });
+      var row = w.App.state.rows[0];
+      var text = row.elements.filter(function (el) { return el.type === 'plain-text' && el.props.text === '08'; })[0];
+      var hit = $('g.element[data-element-id="' + text.id + '"] .hitbox');
+      var slot = w.App.layout.rows[0].elements.filter(function (item) { return item.id === text.id; })[0];
+      ok('S42 每个自由定位元素有与绘制盒一致的命中区',
+        Number(hit.getAttribute('width')) === slot.width && Number(hit.getAttribute('height')) === slot.height);
+      var r = rectOf(hit);
+      mouse('click', hit, r.x + r.w / 2, r.y + r.h / 2);
+      ok('S42 单击站号只选中该基础文字', w.App.selection.elementId === text.id && !!$('[aria-label="文字内容"]'));
+      // 选中触发 SVG 重绘，拖动须使用当前命中节点，不能向已脱离文档的旧节点派发事件。
+      hit = $('g.element[data-element-id="' + text.id + '"] .hitbox');
+      r = rectOf(hit);
+      var others = row.elements.filter(function (el) { return el.id !== text.id; });
+      var beforeOthers = JSON.stringify(others), beforeBox = Object.assign({}, text.props.box);
+      var displayScale = $('#sign-svg').getBoundingClientRect().width / w.App.layout.width;
+      drag(hit, { x: r.x + r.w / 2 + 20, y: r.y + r.h / 2 + 16 });
+      var moved = S.findElement(w.App.state, text.id).element;
+      ok('S42 拖动只改变该元素的 x/y，不改变其余元素或顺序',
+        Math.abs(moved.props.box.x - beforeBox.x - 20 / displayScale / 400) < 0.001 &&
+        Math.abs(moved.props.box.y - beforeBox.y - 16 / displayScale / 400) < 0.001 &&
+        JSON.stringify(w.App.state.rows[0].elements.filter(function (el) { return el.id !== text.id; })) === beforeOthers,
+        'before=' + JSON.stringify(beforeBox) + ' after=' + JSON.stringify(moved.props.box) +
+          ' displayScale=' + displayScale + ' afterScale=' + $('#sign-svg').getBoundingClientRect().width / w.App.layout.width +
+          ' rowHeight=' + w.App.state.rowHeight + ' layout=' + w.App.layout.width + 'x' + w.App.layout.height +
+          ' rect=' + JSON.stringify(rectOf($('#sign-svg'))));
+      await new Promise(function (resolve) { setTimeout(resolve, 0); });
+      var textInput = $('[aria-label="文字内容"]');
+      textInput.value = '10';
+      textInput.dispatchEvent(new w.Event('input', { bubbles: true }));
+      ok('S42 单行文字可通过独立面板修改', S.findElement(w.App.state, text.id).element.props.text === '10');
+
+      var shape = w.App.state.rows[0].elements.filter(function (el) { return el.type === 'shape' && el.props.fill === '#E4002B'; })[0];
+      var shapeHit = $('g.element[data-element-id="' + shape.id + '"] .hitbox');
+      var sr = rectOf(shapeHit);
+      mouse('click', shapeHit, sr.x + sr.w / 2, sr.y + sr.h / 2);
+      var fill = $('#right-panel-body .hex-input'), stroke = $('[aria-label="描边宽度"]');
+      fill.value = '#123456'; fill.dispatchEvent(new w.Event('input', { bubbles: true }));
+      stroke.value = '4'; stroke.dispatchEvent(new w.Event('change', { bubbles: true }));
+      var changed = S.findElement(w.App.state, shape.id).element;
+      ok('S42 基础图形可单独编辑填充与描边', changed.props.fill === '#123456' && changed.props.strokeWidth === 4);
+
+      signSection('route');
+      $('[data-template-id="route-vertical"]').click();
+      var route = w.App.state.rows[0];
+      ok('S42 线路图也拆为可独立编辑的文字和图形', route.layout === 'free' && route.elements.length > 10 &&
+        boards().length === 2 && workspaceRow(row.id).elements.some(function (el) { return el.id === shape.id && el.props.fill === '#123456'; }) &&
+        route.elements.some(function (el) { return el.type === 'plain-text' || el.type === 'bilingual-text'; }) &&
+        route.elements.some(function (el) { return el.type === 'shape'; }) &&
+        route.elements.every(function (el) { return el.type !== 'crt-sign' && el.props.box; }));
+      var rowId = route.id;
+      w.App.update(function (sign) {
+        return S.addElement(sign, rowId, S.createElement('plain-text', { text: '中文混排', font: 'en' }));
+      });
+      var faces = w.SignExporters.collectUsedFonts(w.App.state);
+      var fontData = await w.SignExporters.ensureFontData();
+      var svg = w.SignExporters.buildExportSVGString(w.App.state, w.App.measure, fontData);
+      var exported = new w.DOMParser().parseFromString(svg, 'image/svg+xml');
+      ok('S42 全 free 行导出包含中文回退字体和可编辑文字', faces.zh400 && faces.en400 &&
+        svg.indexOf('@font-face') !== -1 && svg.indexOf('Source Han Sans SC') !== -1 &&
+        !exported.querySelector('parsererror') && exported.documentElement.textContent.indexOf('中文混排') !== -1);
+      signSection('horizontal');
+      paletteTab('basic');
+    }
+
+    async function s43_aspectAndPresetReuse() {
+      var w = W(), S = w.SignState;
+      w.App.select(null);
+      w.App.update(function () { return S.createSign(); });
+      signSection('horizontal'); paletteTab('templates');
+      $('[data-template-id="concourse-exit"]').click();
+      var row = w.App.state.rows[0], id = row.id;
+      ok('S43 组合预设按参考比例自动确定牌面宽度', row.widthRatio === 5.25 &&
+        w.App.layout.width === Math.ceil(w.App.state.rowHeight * 5.25));
+      var aspect = $('.row-aspect-editor');
+      if (aspect.tagName === 'DETAILS' && !aspect.open) aspect.querySelector('[data-aspect-toggle]').click();
+      ok('S43 比例调整可从折叠入口显式展开', aspect.tagName !== 'DETAILS' || aspect.open);
+      $('[data-aspect-ratio="3"]').click();
+      ok('S43 比例快捷项即时改变预览', w.App.state.rows[0].widthRatio === 3 && w.App.layout.width === w.App.state.rowHeight * 3);
+      function customEight() {
+        var height = $('[aria-label="牌面比例高"]'), width = $('[aria-label="牌面比例宽"]');
+        height.value = '1'; height.dispatchEvent(new w.Event('change', { bubbles: true }));
+        width.value = '8'; width.dispatchEvent(new w.Event('change', { bubbles: true }));
+      }
+      customEight();
+      ok('S43 用户可自定义 8:1 且内容仍可独立编辑', w.App.state.rows[0].widthRatio === 8 &&
+        w.App.layout.width === w.App.state.rowHeight * 8 && w.App.state.rows[0].elements.some(function (el) { return el.type === 'exit'; }));
+      $('.aspect-reset').click();
+      ok('S43 可恢复预设参考比例', w.App.state.rows[0].widthRatio === 5.25);
+      customEight();
+      $('.row-band[data-row-index="0"] .row-actions button').click();
+      $('.modal-input').value = 'S43 八比一预设';
+      await modalAct('ok');
+      var saved = w.SignPresets.list().filter(function (p) { return p.name === 'S43 八比一预设'; }).pop();
+      ok('S43 个人预设保存用户比例和参考比例', saved && saved.row && saved.row.widthRatio === 8 && saved.row.referenceWidthRatio === 5.25);
+      paletteTab('presets');
+      var card = $$('.preset-card').filter(function (node) { return node.textContent.indexOf('S43 八比一预设') !== -1; })[0];
+      card.click(); $('[data-preset-use]').click();
+      ok('S43 点击使用个人预设保留比例并生成独立牌面', boards().length === 2 && w.App.state.rows.length === 1 &&
+        w.App.state.rows[0].widthRatio === 8 && w.App.state.rows[0].referenceWidthRatio === 5.25 &&
+        w.App.state.rows[0].elements[0].id !== workspaceRow(id).elements[0].id);
+      $('#add-row-btn').click();
+      var eventData = new w.DataTransfer();
+      eventData.setData(w.SignInteract.MIME_PRESET, JSON.stringify({ kind: 'preset', id: saved.id }));
+      var band = $('.row-band[data-row-index="1"]'), bounds = band.getBoundingClientRect();
+      var previousBoardId = w.App.state.workspace.activeId;
+      ['dragover', 'drop'].forEach(function (kind) {
+        $('#canvas-wrap').dispatchEvent(new w.DragEvent(kind, { bubbles: true, cancelable: true, dataTransfer: eventData,
+          clientX: bounds.left + Math.min(50, bounds.width / 2), clientY: bounds.top + bounds.height / 2 }));
+      });
+      ok('S43 拖入个人预设创建新牌并保留用户比例和旧牌空行', boards().length === 3 && w.App.state.rows.length === 1 &&
+        w.App.state.rows[0].widthRatio === 8 && w.App.state.rows[0].referenceWidthRatio === 5.25 &&
+        w.App.state.rows[0].elements.length === workspaceRow(id).elements.length &&
+        boards().filter(function (board) { return board.id === previousBoardId; })[0].sign.rows.length === 2);
+
+      frame.style.width = '375px'; frame.style.height = '812px'; w.dispatchEvent(new w.Event('resize'));
+      await waitFor(function () { return w.App.isMobileView(); });
+      paletteTab('presets');
+      card = $$('.preset-card').filter(function (node) { return node.textContent.indexOf('S43 八比一预设') !== -1; })[0];
+      card.click();
+      var use = $('[data-preset-use]'), beforeBoards = boards().length;
+      ok('S43 移动端预设禁用原生拖拽时仍提供使用按钮', card.getAttribute('draggable') === 'false' && !!use);
+      use.click();
+      ok('S43 移动端点击使用预设可以添加独立牌并保留比例', boards().length === beforeBoards + 1 &&
+        w.App.state.rows.length === 1 && w.App.state.rows[0].widthRatio === 8);
+
+      paletteTab('templates'); $('[data-template-id="entrance-guide"]').click();
+      var lineRow = w.App.state.rows.filter(function (item) { return item.templateId === 'entrance-guide'; }).pop();
+      var line = lineRow.elements.filter(function (el) { return el.type === 'number-line'; })[0];
+      var hit = $('g.element[data-element-id="' + line.id + '"] .hitbox'), r = rectOf(hit);
+      mouse('click', hit, r.x + r.w / 2, r.y + r.h / 2);
+      var number = $('.le-number'); number.value = '3'; number.dispatchEvent(new w.Event('input', { bubbles: true }));
+      ok('S43 重庆预设改线路号使用重庆线路色', w.App.prefs.paletteCity === 'chongqing' &&
+        S.findElement(w.App.state, line.id).element.props.lines[0].color === '#003DA5');
+      w.SignPresets.remove(saved.id);
+      frame.style.width = '1280px'; frame.style.height = '860px'; w.dispatchEvent(new w.Event('resize'));
+      await waitFor(function () { return !w.App.isMobileView(); });
+      w.App.select(null); paletteTab('basic');
+    }
+
+    var e2eRouteId = null;
+    async function s44_routeFilesAndLibrary() {
+      var w = W(), S = w.SignState;
+      w.App.select(null); w.App.update(function () { return S.createSign(); });
+      signSection('route'); $('[data-route-manager]').click();
+      $('[data-route-action="new"]').click();
+      function input(selector, value) {
+        var node = $(selector); node.value = value; node.dispatchEvent(new w.Event('input', { bubbles: true }));
+      }
+      input('[data-route-field="nameZh"]', '云间线');
+      input('[data-route-field="nameEn"]', 'Cloud Line');
+      input('[data-route-field="colorHex"]', '#7B2CBF');
+      var names = [['星港', 'Star Harbor', 'A1', ''], ['云谷', 'Cloud Valley', 'A2', '星环线'], ['月台', 'Moon Terrace', 'A3', '']];
+      names.forEach(function (values, index) {
+        ['nameZh', 'nameEn', 'code', 'transfers'].forEach(function (key, field) {
+          var node = $$('[data-route-station]')[index].querySelector('[data-station-field="' + key + '"]');
+          node.value = values[field]; node.dispatchEvent(new w.Event('input', { bubbles: true }));
+        });
+      });
+      $$('[data-station-current]')[1].click();
+      $$('[data-route-station]')[1].querySelector('[data-station-action="up"]').click();
+      $('[data-route-action="add-station"]').click();
+      ok('S44 可以添加新站点并为其提供独立编辑字段', $$('[data-route-station]').length === 4 &&
+        $$('[data-route-station]')[3].querySelectorAll('[data-station-field]').length === 4);
+      $$('[data-route-station]')[3].querySelector('[data-station-action="remove"]').click();
+      var direction = $('[data-route-field="direction"]'); direction.value = 'backward';
+      direction.dispatchEvent(new w.Event('change', { bubbles: true }));
+      $('[data-route-action="save"]').click();
+      var saved = w.SignRoutes.list().filter(function (line) { return line.nameZh === '云间线'; }).pop();
+      e2eRouteId = saved.id;
+      ok('S44 新线路可编辑名称颜色方向站号和换乘并保存本地', saved.color === '#7B2CBF' && saved.nameEn === 'Cloud Line' &&
+        saved.direction === 'backward' && saved.stations.length === 3 && saved.stations[0].nameZh === '云谷' &&
+        saved.stations[0].code === 'A2' && saved.stations[0].transfers === '星环线');
+      ok('S44 站点排序后本站按 ID 跟随', saved.currentStationId === saved.stations[0].id && saved.stations[1].nameZh === '星港');
+
+      var captured = null, download = w.SignStorage.download;
+      w.SignStorage.download = function (blob, name) { captured = { blob: blob, name: name }; };
+      $('[data-route-action="export"]').click();
+      w.SignStorage.download = download;
+      var json = await captured.blob.text(), file = JSON.parse(json);
+      ok('S44 独立线路文件含格式版本及完整线路数据', captured.name.indexOf('.railway-line.json') !== -1 &&
+        file.format === 'railway-line' && file.version === 1 && file.line.id === saved.id && file.line.stations[0].nameZh === '云谷');
+      $('[data-route-action="new"]').click();
+      var fileInput = $('[data-route-file]'), opened = false;
+      fileInput.addEventListener('click', function (event) { opened = true; event.preventDefault(); }, { once: true });
+      $('[data-route-action="import"]').click();
+      var data = new w.DataTransfer(); data.items.add(new w.File([json], '云间线.railway-line.json', { type: 'application/json' }));
+      fileInput.files = data.files; fileInput.dispatchEvent(new w.Event('change', { bubbles: true }));
+      var imported = await waitFor(function () { return $('[data-route-field="nameZh"]').value === '云间线'; });
+      ok('S44 导入按钮打开文件选择且恢复站点与本站', opened && imported && $$('[data-route-station]').length === 3 &&
+        $$('[data-station-current]')[0].checked && $$('[data-route-station]')[0].querySelector('[data-station-field="nameZh"]').value === '云谷');
+      // 错把项目文件当作线路文件时，保留正在编辑的线路并明确报错。
+      data = new w.DataTransfer(); data.items.add(new w.File(['{"rows":[]}'], 'project.json', { type: 'application/json' }));
+      fileInput.files = data.files; fileInput.dispatchEvent(new w.Event('change', { bubbles: true }));
+      await waitFor(function () { return $('.route-status').classList.contains('error'); });
+      ok('S44 错误线路文件不覆盖当前内容', $('.route-status').classList.contains('error') &&
+        $('[data-route-field="nameZh"]').value === '云间线' && w.SignRoutes.list().some(function (line) { return line.id === saved.id; }));
+
+      $('[data-route-action="new"]').click();
+      var library = $('[data-route-library]'); library.value = saved.id; library.dispatchEvent(new w.Event('change', { bubbles: true }));
+      ok('S44 本地线路库可重新载入保存的线路', $('[data-route-field="nameZh"]').value === '云间线' &&
+        $$('[data-route-station]')[0].querySelector('[data-station-field="code"]').value === 'A2');
+      var orientation = $('[data-route-field="orientation"]'); orientation.value = 'vertical';
+      orientation.dispatchEvent(new w.Event('change', { bubbles: true }));
+      $('[data-route-action="apply"]').click();
+      var row = w.App.state.rows[0];
+      ok('S44 自创线路放入牌面后保持基础元素与线路数据', row.layout === 'free' && row.route && row.route.orientation === 'vertical' &&
+        row.route.line.id === saved.id && row.elements.length > 10 && row.elements.every(function (el) { return el.type !== 'crt-sign'; }) &&
+        $('#sign-svg').textContent.indexOf('云谷') !== -1 && $('#sign-svg').textContent.indexOf('星环线') !== -1);
+      var originalRowId = row.id;
+      $('[data-route-edit]').click(); input('[data-route-station] [data-station-field="nameZh"]', '云谷中央');
+      $('[data-route-action="apply"]').click();
+      ok('S44 从牌面编辑线路更新原行且不重复添加', w.App.state.rows.length === 1 && w.App.state.rows[0].id === originalRowId &&
+        boards().length === 1 &&
+        w.App.state.rows[0].route.line.stations[0].nameZh === '云谷中央');
+      var restored = S.deserializeSign(S.serializeSign(w.App.state));
+      ok('S44 项目保存恢复线路源数据及排版信息', restored.rows[0].route.line.id === saved.id &&
+        restored.rows[0].route.line.stations[0].nameZh === '云谷中央' && restored.rows[0].route.orientation === 'vertical');
+
+      frame.style.width = '375px'; frame.style.height = '568px'; w.dispatchEvent(new w.Event('resize'));
+      await waitFor(function () { return w.App.isMobileView(); });
+      $('[data-route-manager]').click();
+      // 通用遮罩带 150ms 入场平移，布局断言等其回到视口内后再读取坐标。
+      await waitFor(function () {
+        var bounds = rectOf($('.route-modal'));
+        return bounds.x >= 0 && bounds.x + bounds.w <= w.innerWidth + 1;
+      });
+      var modal = rectOf($('.route-modal')), footer = rectOf($('.route-modal-actions'));
+      ok('S44 小屏线路管理完整留在视口且保存操作可达', modal.x >= 0 && modal.x + modal.w <= w.innerWidth + 1 &&
+        modal.y >= 0 && modal.y + modal.h <= w.innerHeight + 1 && footer.y + footer.h <= w.innerHeight + 1 &&
+        w.document.documentElement.scrollWidth <= w.innerWidth,
+        'modal=' + JSON.stringify(modal) + ' footer=' + JSON.stringify(footer) + ' viewport=' + w.innerWidth + 'x' + w.innerHeight +
+        ' documentWidth=' + w.document.documentElement.scrollWidth);
+      input('[data-route-field="nameEn"]', 'Cloud Line Mobile'); $('[data-route-action="save"]').click();
+      ok('S44 小屏修改线路可保存到本地库', w.SignRoutes.list().some(function (line) { return line.id === saved.id && line.nameEn === 'Cloud Line Mobile'; }));
+      $('[aria-label="关闭线路管理"]').click();
+      frame.style.width = '1280px'; frame.style.height = '860px'; w.dispatchEvent(new w.Event('resize'));
+      await waitFor(function () { return !w.App.isMobileView(); });
+      w.App.select(null); paletteTab('basic');
+    }
+
+    async function s45_fictionalStationContext() {
+      var w = W(), S = w.SignState;
+      w.App.select(null); signSection('route'); $('[data-route-manager]').click();
+      var library = $('[data-route-library]'); library.value = e2eRouteId;
+      library.dispatchEvent(new w.Event('change', { bubbles: true }));
+      $('[data-route-action="context"]').click();
+      ok('S45 自创线路可用于制作全部车站标识', w.App.state.context && w.App.state.context.line.id === e2eRouteId &&
+        !!$('[data-context-station]') && !$('[data-context-station]').closest('.project-context-bar').hidden);
+      var line = w.App.state.context.line;
+      var star = line.stations.filter(function (station) { return station.nameZh === '星港'; })[0];
+      var moon = line.stations.filter(function (station) { return station.nameZh === '月台'; })[0];
+      function station(id) {
+        var select = $('[data-context-station]'); select.value = id;
+        select.dispatchEvent(new w.Event('change', { bubbles: true }));
+      }
+      function add(template, section) {
+        signSection(section); paletteTab('templates'); $('[data-template-id="' + template + '"]').click();
+        return S.findElement(w.App.state, w.App.selection.elementId).rowId;
+      }
+      function row(id) { return workspaceRow(id); }
+      function content(id) { return JSON.stringify(row(id).elements.map(function (el) { return el.props; })); }
+      station(star.id);
+      var stationRowId = add('station-name', 'vertical');
+      var starSnapshot = content(stationRowId);
+      ok('S45 当前车站自动填入站名英文站号和虚构线路色', starSnapshot.indexOf('星港') !== -1 &&
+        starSnapshot.indexOf('Star Harbor') !== -1 && starSnapshot.indexOf('A1') !== -1 && starSnapshot.indexOf('#7B2CBF') !== -1 &&
+        !/石油路|八公里|沙坪坝/.test(starSnapshot));
+      var lintel = add('entrance-lintel', 'horizontal');
+      ok('S45 门楣复用虚构站名和线路且不覆盖出入口编号', content(lintel).indexOf('星港') !== -1 &&
+        content(lintel).indexOf('Cloud Line Mobile') !== -1 && content(lintel).indexOf('#7B2CBF') !== -1 &&
+        row(lintel).elements.some(function (el) { return el.type === 'entrance' && el.props.code === '1/2'; }));
+      var train = add('train-guide', 'horizontal');
+      ok('S45 乘车引导复用自创线路名称和颜色', content(train).indexOf('云间') !== -1 &&
+        content(train).indexOf('Cloud Line Mobile') !== -1 && content(train).indexOf('#7B2CBF') !== -1);
+      var direction = add('platform-direction', 'horizontal');
+      ok('S45 运行方向不残留真实重庆示例地名', !/观音桥|举人坝|璧山|朝天门|石油路|八公里/.test(content(direction)) &&
+        /星港|云谷中央|月台/.test(content(direction)));
+      ok('S45 自创线路底色贯穿完整运行方向牌面', row(direction).backgroundColor === '#7B2CBF');
+      var exit = add('concourse-exit', 'horizontal');
+      ok('S45 线路上下文保留出口编号与出口底色', row(exit).elements.some(function (el) { return el.type === 'exit' && el.props.code === '1/2'; }) &&
+        row(exit).backgroundColor === w.SignCore.EXIT_COLOR);
+      var route = add('route-vertical', 'route');
+      ok('S45 标准线路图预设也复用整条自创线路', ['星港', '云谷中央', '月台', 'A1', 'A2', 'A3'].every(function (value) {
+        return content(route).indexOf(value) !== -1;
+      }) && !/石油路|大坪|鹅岭|两路口/.test(content(route)));
+      station(moon.id);
+      var moonRow = add('station-name', 'vertical');
+      ok('S45 切换当前车站仅影响后续添加内容', content(moonRow).indexOf('月台') !== -1 &&
+        content(moonRow).indexOf('Moon Terrace') !== -1 && content(moonRow).indexOf('A3') !== -1 && content(stationRowId) === starSnapshot);
+      var restored = S.deserializeSign(S.serializeSign(w.App.state));
+      ok('S45 项目文件保留虚构线路与当前车站', restored.context && restored.context.line.id === e2eRouteId &&
+        restored.context.stationId === moon.id && restored.context.line.color === '#7B2CBF');
+      frame.style.width = '375px'; frame.style.height = '568px'; w.dispatchEvent(new w.Event('resize'));
+      await waitFor(function () { return w.App.isMobileView(); });
+      await waitFor(function () { return $('#canvas-scroll').getBoundingClientRect().height >= 140; });
+      ok('S45 小屏当前车站选择器可用且编辑区保留可用高度', !!$('[data-context-station]') &&
+        !$('.project-context-bar').hidden && $('#canvas-scroll').getBoundingClientRect().height >= 140 &&
+        w.document.documentElement.scrollWidth <= w.innerWidth,
+        'editHeight=' + $('#canvas-scroll').getBoundingClientRect().height);
+      station(star.id);
+      ok('S45 小屏可切换当前车站', w.App.state.context.stationId === star.id);
+      frame.style.width = '1280px'; frame.style.height = '860px'; w.dispatchEvent(new w.Event('resize'));
+      await waitFor(function () { return !w.App.isMobileView(); });
+      w.App.select(null); paletteTab('basic');
+    }
+
+    async function s46_exportSingleSign() {
+      var w = W(), S = w.SignState;
+      w.App.select(null); w.App.update(function () { return S.createSign(); });
+      signSection('horizontal'); paletteTab('templates'); $('[data-template-id="concourse-exit"]').click();
+      signSection('vertical'); $('[data-template-id="station-name"]').click();
+      var aspect = $('.row-aspect-editor');
+      if (aspect.tagName === 'DETAILS' && !aspect.open) aspect.querySelector('[data-aspect-toggle]').click();
+      var before = JSON.stringify(w.App.state), h = w.App.state.rowHeight;
+      var svgButton = $('[data-export-row="svg"]'), pngButton = $('[data-export-row="png"]');
+      var downloads = [], original = w.SignStorage.download;
+      w.SignStorage.download = function (blob, name) { downloads.push({ blob: blob, name: name }); };
+      try {
+        svgButton.click();
+        await waitFor(function () { return downloads.length === 1 && !svgButton.disabled; }, 5000);
+        var source = await downloads[0].blob.text();
+        var svg = new w.DOMParser().parseFromString(source, 'image/svg+xml');
+        var text = Array.prototype.map.call(svg.querySelectorAll('text'), function (node) { return node.textContent; }).join(' ');
+        ok('S46 多牌项目单牌 SVG 仅按当前竖牌比例导出', !svg.querySelector('parsererror') &&
+          Number(svg.documentElement.getAttribute('width')) === Math.ceil(h * 0.75) &&
+          Number(svg.documentElement.getAttribute('height')) === h && svg.querySelectorAll('.sign-row').length === 1 &&
+          text.indexOf('石油路') !== -1 && text.indexOf('Exit') === -1);
+        ok('S46 单牌 SVG 内嵌实际使用的中文与西文字体', source.indexOf('@font-face') !== -1 &&
+          source.indexOf('base64,') !== -1 && source.indexOf('Source Han Sans SC') !== -1);
+        pngButton.click();
+        await waitFor(function () { return downloads.length === 2 && !pngButton.disabled; }, 5000);
+        var png = new DataView(await downloads[1].blob.arrayBuffer());
+        ok('S46 单牌 PNG 尺寸正确且不改动其他独立牌面', downloads[1].blob.type === 'image/png' &&
+          png.getUint32(16) === Math.ceil(h * 0.75) && png.getUint32(20) === h &&
+          JSON.stringify(w.App.state) === before && boards().length === 2 && w.App.state.rows.length === 1 && w.App.layout.height === h);
+      } finally { w.SignStorage.download = original; }
+    }
+
+    async function s47_independentBoards() {
+      var w = W(), S = w.SignState;
+      w.App.select(null); w.App.update(function () { return S.createSign(); });
+      signSection('vertical'); paletteTab('templates'); $('[data-template-id="station-name"]').click();
+      var verticalId = w.App.state.workspace.activeId, verticalRowId = w.App.state.rows[0].id;
+      var initialSize = rectOf($('#sign-svg'));
+      signSection('horizontal'); $('[data-template-id="entrance-lintel"]').click();
+      var lintelId = w.App.state.workspace.activeId;
+      ok('S47 先竖站名后门楣创建两块独立牌且当前只显示门楣', boards().length === 2 &&
+        w.App.state.rows.length === 1 && w.App.layout.width === w.App.state.rowHeight * 6 &&
+        w.App.layout.height === w.App.state.rowHeight && $('#sign-svg').textContent.indexOf('八公里') !== -1 &&
+        $('#sign-svg').textContent.indexOf('石油路') === -1 && $$('#board-switcher .board-item').length === 2);
+      $('[data-board-select="' + verticalId + '"]').click();
+      var returnedSize = rectOf($('#sign-svg'));
+      ok('S47 切回竖牌恢复自己的显示尺寸且不受长横牌缩小', w.App.state.rows[0].id === verticalRowId &&
+        w.App.layout.width === w.App.state.rowHeight * 0.75 && returnedSize.h > 200 &&
+        Math.abs(returnedSize.w - initialSize.w) < 1 && Math.abs(returnedSize.h - initialSize.h) < 1 &&
+        $('#sign-svg').textContent.indexOf('石油路') !== -1 && $('#sign-svg').textContent.indexOf('八公里') === -1 &&
+        $('.board-item.active').dataset.boardId === verticalId);
+      var title = w.App.state.rows[0].elements.filter(function (el) { return el.type === 'bilingual-text'; })[0];
+      var hit = $('g.element[data-element-id="' + title.id + '"] .hitbox'), r = rectOf(hit);
+      mouse('click', hit, r.x + r.w / 2, r.y + r.h / 2);
+      var input = $('[aria-label="中文文本"]') || $('#right-panel-body input[type="text"]');
+      input.value = '星港站'; input.dispatchEvent(new w.Event('input', { bubbles: true }));
+      $('[data-board-select="' + lintelId + '"]').click();
+      ok('S47 切牌清除旧元素选择并保持另一块牌的内容', !w.App.selection.elementId &&
+        $('#sign-svg').textContent.indexOf('八公里') !== -1 && $('#sign-svg').textContent.indexOf('星港站') === -1);
+      $('[data-board-select="' + verticalId + '"]').click();
+      ok('S47 再次切回保留该牌的独立编辑', S.findElement(w.App.state, title.id).element.props.textZh === '星港站' &&
+        $('#sign-svg').textContent.indexOf('星港站') !== -1);
+      $('[data-board-rename="' + verticalId + '"]').click();
+      $('.modal-input').value = '星港站 · 竖站名'; await modalAct('ok');
+      var restored = S.deserializeSign(S.serializeSign(w.App.state));
+      ok('S47 改名与全部牌内容保存到项目 JSON', w.SignWorkspace.list(restored).length === 2 &&
+        w.SignWorkspace.list(restored).some(function (board) { return board.id === verticalId && board.name === '星港站 · 竖站名' &&
+          S.findElement(board.sign, title.id).element.props.textZh === '星港站'; }) &&
+        w.SignWorkspace.list(restored).some(function (board) { return board.id === lintelId && JSON.stringify(board.sign).indexOf('八公里') !== -1; }));
+      frame.style.width = '375px'; frame.style.height = '568px'; w.dispatchEvent(new w.Event('resize'));
+      await waitFor(function () { return w.App.isMobileView(); });
+      $('[data-board-select="' + lintelId + '"]').click();
+      $('[data-board-select="' + verticalId + '"]').click();
+      await waitFor(function () { return $('#canvas-scroll').getBoundingClientRect().height >= 140; });
+      ok('S47 小屏可切换独立牌且画布不横向溢出', $('.board-item.active').dataset.boardId === verticalId &&
+        $('#sign-svg').textContent.indexOf('星港站') !== -1 && w.document.documentElement.scrollWidth <= w.innerWidth &&
+        $('#canvas-scroll').getBoundingClientRect().height >= 140);
+      $('[data-board-delete="' + lintelId + '"]').click(); await modalAct('cancel');
+      ok('S47 取消删除保留两块牌', boards().length === 2);
+      $('[data-board-delete="' + lintelId + '"]').click(); await modalAct('ok');
+      ok('S47 删除一块牌保留另一块的内容和比例', boards().length === 1 && w.App.state.workspace.activeId === verticalId &&
+        S.findElement(w.App.state, title.id).element.props.textZh === '星港站' && w.App.state.rows[0].widthRatio === 0.75);
+      $('[data-board-action="new"]').click();
+      ok('S47 可新建独立空白牌而不清空已有牌', boards().length === 2 && w.App.state.rows.length === 1 &&
+        !w.App.state.rows[0].elements.length && workspaceRow(verticalRowId).elements.some(function (el) { return el.id === title.id; }));
+      frame.style.width = '1280px'; frame.style.height = '860px'; w.dispatchEvent(new w.Event('resize'));
+      await waitFor(function () { return !w.App.isMobileView(); });
+    }
+
+    async function s48_routeEditorStaysOpen() {
+      var w = W(), S = w.SignState;
+      w.App.select(null); w.App.update(function () { return S.createSign(); });
+      function open() { $('[data-route-manager]').click(); }
+      function input(selector, value) {
+        var node = $(selector); node.value = value; node.dispatchEvent(new w.Event('input', { bubbles: true })); return node;
+      }
+      function stillOpen() { return !!$('.route-mask'); }
+      open(); $('[data-route-action="new"]').click();
+      for (var width of [1280, 375]) {
+        frame.style.width = width + 'px'; frame.style.height = width === 375 ? '568px' : '860px';
+        w.dispatchEvent(new w.Event('resize'));
+        await waitFor(function () { return w.App.isMobileView() === (width === 375); });
+        var name = input('[data-route-field="nameZh"]', '选字拖出仍保留'), mask = $('.route-mask');
+        var r = rectOf(name);
+        pointer('pointerdown', name, r.x + r.w - 8, r.y + r.h / 2);
+        pointer('pointerup', mask, 1, r.y + r.h / 2);
+        mouse('click', mask, 1, r.y + r.h / 2);
+        ok('S48 ' + width + 'px 输入框选字拖到遮罩松开保持编辑器和文字', stillOpen() &&
+          $('[data-route-field="nameZh"]').value === '选字拖出仍保留');
+        if (!stillOpen()) open();
+      }
+      frame.style.width = '1280px'; frame.style.height = '860px'; w.dispatchEvent(new w.Event('resize'));
+      await waitFor(function () { return !w.App.isMobileView(); });
+      function escape(options) {
+        $('[data-route-field="nameZh"]').dispatchEvent(new w.KeyboardEvent('keydown', Object.assign({
+          key: 'Escape', code: 'Escape', keyCode: 27, bubbles: true, cancelable: true,
+        }, options || {})));
+      }
+      function composition(type) {
+        $('[data-route-field="nameZh"]').dispatchEvent(new w.CompositionEvent(type, { data: 'xing', bubbles: true }));
+      }
+      composition('compositionstart'); escape({ isComposing: true });
+      ok('S48 IME 组合输入中的 Escape 仅取消候选不关闭线路编辑器', stillOpen());
+      if (!stillOpen()) open();
+      composition('compositionend'); escape({ keyCode: 229, which: 229 });
+      ok('S48 旧浏览器 IME keyCode229 的 Escape 保持线路编辑器', stillOpen());
+      if (!stillOpen()) open();
+      composition('compositionstart'); escape({ isComposing: false });
+      ok('S48 composition 事件标志兼容缺少 isComposing 的按键', stillOpen());
+      if (!stillOpen()) open();
+      composition('compositionend'); escape();
+      ok('S48 组合输入结束后普通 Escape 仍可主动关闭', !stillOpen());
+      if (!stillOpen()) open();
+      $('[aria-label="关闭线路管理"]').click();
+      ok('S48 显式关闭按钮仍可关闭线路编辑器', !stillOpen());
+
+      // 创建当前项目线路，用实际控件复现 context 旧快照覆盖未保存草稿。
+      open(); $('[data-route-action="new"]').click();
+      input('[data-route-field="nameZh"]', '草稿回归线');
+      input('[data-route-station] [data-station-field="nameZh"]', '初始站');
+      $('[data-route-action="context"]').click();
+      open(); input('[data-route-station] [data-station-field="nameZh"]', '未保存总站');
+      $('[aria-label="关闭线路管理"]').click(); open();
+      ok('S48 当前线路关闭后重开恢复同一条线路的未保存站名草稿',
+        $('[data-route-station] [data-station-field="nameZh"]').value === '未保存总站');
+      input('[data-route-station] [data-station-field="nameZh"]', '牌面原始站');
+      $('[data-route-action="apply"]').click();
+      var routeRow = w.App.state.rows[0].id;
+      $('[data-route-edit]').click(); input('[data-route-station] [data-station-field="nameZh"]', '未保存牌面站');
+      $('[aria-label="关闭线路管理"]').click(); $('[data-route-edit]').click();
+      ok('S48 从牌面编辑关闭后重开不被牌面旧快照覆盖草稿',
+        $('[data-route-station] [data-station-field="nameZh"]').value === '未保存牌面站' && w.App.state.rows[0].id === routeRow);
+      $('[aria-label="关闭线路管理"]').click();
+    }
+
+    async function s49_fictionalLineColors() {
+      var w = W(), S = w.SignState;
+      w.App.select(null); w.App.update(function () { return S.createSign(); });
+      signSection('horizontal'); paletteTab('basic');
+      function input(selector, value) { var node = $(selector); typeInto(node, value); return node; }
+      function choose(selector, value) { var node = $(selector); node.value = value; node.dispatchEvent(new w.Event('change', { bubbles: true })); }
+      function openLine(id) { $('[data-route-manager]').click(); choose('[data-route-library]', id); }
+      function closeLine() { $('[aria-label="关闭线路管理"]').click(); }
+      function addBasic(name) {
+        $$('[data-palette-pane="basic"] .palette-card').filter(function (card) {
+          return card.querySelector('.card-name').textContent === name;
+        })[0].click();
+        var row = w.App.state.rows[w.App.state.rows.length - 1], el = row.elements[row.elements.length - 1];
+        var hit = $('g.element[data-element-id="' + el.id + '"] .hitbox'), r = rectOf(hit);
+        mouse('click', hit, r.x + r.w / 2, r.y + r.h / 2); return el.id;
+      }
+      function props(id) { return S.findElement(w.App.state, id).element.props; }
+      function namedSwatch(name, color) {
+        return $$('#right-panel-body .cp-swatch').some(function (button) {
+          return button.dataset.color === color && (button.title + button.textContent).indexOf(name) !== -1;
+        });
+      }
+      $('[data-route-manager]').click(); $('[data-route-action="new"]').click();
+      input('[data-route-field="nameZh"]', '9号线'); input('[data-route-field="nameEn"]', 'Violet Line Nine');
+      input('[data-route-field="colorHex"]', '#7B2CBF');
+      input('[data-route-station] [data-station-field="transfers"]', '10号线');
+      $('[data-route-action="save"]').click();
+      var nine = w.SignRoutes.list().filter(function (line) { return line.nameZh === '9号线'; })[0];
+      $('[data-route-action="new"]').click();
+      input('[data-route-field="nameZh"]', '10号线'); input('[data-route-field="nameEn"]', 'Orange Line Ten');
+      input('[data-route-field="colorHex"]', '#F28C28'); $('[data-route-action="save"]').click();
+      var ten = w.SignRoutes.list().filter(function (line) { return line.nameZh === '10号线'; })[0];
+      var captured = null, originalDownload = w.SignStorage.download;
+      w.SignStorage.download = function (blob, name) { captured = { blob: blob, name: name }; };
+      $('[data-route-action="export"]').click(); w.SignStorage.download = originalDownload;
+      var tenFile = JSON.parse(await captured.blob.text()); closeLine();
+
+      var numberId = addBasic('数字线路'), city = $('#right-panel-body .cp-city-select');
+      var fictionalOption = city.querySelector('option[value="fictional"]');
+      ok('S49 已保存线路可作为“我的线路”颜色源', !!fictionalOption && fictionalOption.textContent.indexOf('我的线路') !== -1);
+      if (fictionalOption) choose('#right-panel-body .cp-city-select', 'fictional');
+      ok('S49 自建色板以线路中文名展示两条线路本色', namedSwatch('9号线', '#7B2CBF') && namedSwatch('10号线', '#F28C28'));
+      input('.le-number', '9');
+      ok('S49 我的线路数字9自动使用自建紫色', props(numberId).lines[0].color === '#7B2CBF');
+      input('.le-number', '10');
+      ok('S49 我的线路数字10自动使用自建橙色', props(numberId).lines[0].color === '#F28C28');
+      var previousColor = props(numberId).lines[0].color;
+      input('.le-number', '11');
+      ok('S49 我的线路缺少11时不套用真实城市11号线色', props(numberId).lines[0].color === previousColor);
+      choose('#right-panel-body .cp-city-select', 'shanghai'); input('.le-number', '9');
+      ok('S49 已固定的自创线路色不会被切换城市并改号覆盖', props(numberId).lines[0].color === previousColor);
+      var cityNumberId = addBasic('数字线路'); input('.le-number', '9');
+      ok('S49 明确选择城市后新建自动配色元素仍尊重该城市配色', props(cityNumberId).lines[0].color === w.SignCore.lineColorFor('9', 'shanghai').bg);
+      var originalHit = $('g.element[data-element-id="' + numberId + '"] .hitbox'), originalRect = rectOf(originalHit);
+      mouse('click', originalHit, originalRect.x + originalRect.w / 2, originalRect.y + originalRect.h / 2);
+      if (fictionalOption) choose('#right-panel-body .cp-city-select', 'fictional');
+      var numberChoice = $('[data-fictional-number]');
+      if (numberChoice) choose('[data-fictional-number]', nine.id);
+      ok('S49 数字线路可按自建线路名称下拉选取', !!numberChoice &&
+        props(numberId).lines[0].number === '9' && props(numberId).lines[0].color === '#7B2CBF');
+
+      var numberInput = $('.le-number'), cityInput = $('#right-panel-body .cp-city-select');
+      openLine(nine.id); input('[data-route-field="colorHex"]', '#6A1B9A'); $('[data-route-action="save"]').click();
+      w.SignStorage.download = function (blob, name) { captured = { blob: blob, name: name }; };
+      $('[data-route-action="export"]').click(); w.SignStorage.download = originalDownload;
+      var nineFile = JSON.parse(await captured.blob.text()); closeLine();
+      ok('S49 保存线路改色后原地更新色板且不重建正在编辑的输入框', $('.le-number') === numberInput &&
+        $('#right-panel-body .cp-city-select') === cityInput && namedSwatch('9号线', '#6A1B9A'));
+      ok('S49 独立线路文件携带换乘线路名称与各自颜色', nineFile.line.relatedLines && nineFile.line.relatedLines.some(function (line) {
+        return line.id === ten.id && line.nameZh === '10号线' && line.color === '#F28C28';
+      }));
+      tenFile.line.color = '#E67E22';
+      openLine(ten.id);
+      var routeFile = $('[data-route-file]'), fileData = new w.DataTransfer();
+      fileData.items.add(new w.File([JSON.stringify(tenFile)], '10号线.railway-line.json', { type: 'application/json' }));
+      routeFile.files = fileData.files; routeFile.dispatchEvent(new w.Event('change', { bubbles: true }));
+      await waitFor(function () { return $('[data-route-field="colorHex"]').value === '#E67E22'; }); closeLine();
+      ok('S49 导入线路改色也原地更新命名色板且保留输入框', $('.le-number') === numberInput &&
+        $('#right-panel-body .cp-city-select') === cityInput && namedSwatch('10号线', '#E67E22'));
+
+      var textId = addBasic('文本线路');
+      input('[placeholder="如：环 / 机场联络线"]', '9号线');
+      ok('S49 文本线路按自建名称自动匹配英文与本线色', props(textId).textEn === 'Violet Line Nine' && props(textId).blockColor === '#6A1B9A');
+      var textChoice = $('[data-fictional-text]');
+      if (textChoice) choose('[data-fictional-text]', ten.id);
+      ok('S49 文本线路可下拉复用自建线路的中文英文和颜色', !!textChoice &&
+        /10/.test(props(textId).text) && props(textId).textEn === 'Orange Line Ten' && props(textId).blockColor === '#E67E22');
+      openLine(nine.id); $('[data-route-action="context"]').click();
+      ok('S49 使用当前自创线路时自动切换我的线路颜色源', w.App.prefs.paletteCity === 'fictional' &&
+        $('#right-panel-body .cp-city-select').value === 'fictional');
+      var projectJson = S.serializeSign(w.App.state), restored = S.deserializeSign(projectJson);
+      ok('S49 项目JSON保存当前线路和换乘线路色以供恢复', restored.context && restored.context.line.id === nine.id &&
+        JSON.stringify(restored.context).indexOf('#E67E22') !== -1);
+      // 恢复不能依赖同一浏览器恰好还保存着换乘线路。
+      openLine(ten.id); $('[data-route-action="delete-line"]').click(); await modalAct('ok'); closeLine();
+      w.App.update(function () { return restored; });
+      w.App.select(numberId);
+      ok('S49 换乘线路不在本地库时恢复项目仍可复用其命名色板', !w.SignRoutes.list().some(function (line) { return line.id === ten.id; }) &&
+        namedSwatch('9号线', '#6A1B9A') && namedSwatch('10号线', '#E67E22'));
+      w.App.select(null);
+      var autoField = $$('#right-panel-body .field-inline').filter(function (field) { return field.textContent.indexOf('自动匹配线路色') !== -1; })[0];
+      var auto = autoField.querySelector('input'); if (auto.checked) auto.click();
+      w.App.select(numberId);
+      var manual = $$('#right-panel-body .lines-editor .cp-swatch').filter(function (button) {
+        return button.dataset.color === '#E67E22' && (button.title + button.textContent).indexOf('10号线') !== -1;
+      })[0];
+      if (manual) manual.click();
+      input('.le-number', '9');
+      ok('S49 关闭自动配色后改线路号仍保留手选线路色', !!manual && !w.App.prefs.autoLineColor && props(numberId).lines[0].color === '#E67E22');
+      openLine(nine.id); $('[data-route-action="apply"]').click();
+      ok('S49 自创线路图的换乘标记使用换乘线自己的颜色', w.App.state.rows[0].elements.some(function (el) {
+        var p = el.props, label = p.text || p.textZh || (p.lines || []).map(function (line) { return line.number; }).join('/');
+        return /10/.test(label) && (p.color === '#E67E22' || p.blockColor === '#E67E22' || (p.lines || []).some(function (line) { return line.color === '#E67E22'; }));
+      }));
+    }
+
+    function s50_aspectCardGroups() {
+      var w = W(), S = w.SignState;
+      w.App.select(null); w.App.update(function () { return S.createSign(); });
+      signSection('horizontal'); paletteTab('templates'); $('[data-template-id="concourse-exit"]').click(); w.App.select(null);
+      function visible(node) { return !!(node && node.getClientRects().length && w.getComputedStyle(node).visibility !== 'hidden'); }
+      function outputHas(width, height) {
+        var text = $('.aspect-dimensions').textContent; return text.indexOf(String(width)) !== -1 && text.indexOf(String(height)) !== -1;
+      }
+      var width = $('[data-aspect-width]'), height = $('[data-aspect-height]'), dimensions = $('.aspect-dimensions');
+      var firstId = w.App.state.rows[0].id, h = w.App.state.rowHeight;
+      ok('S50 单行比例卡省略多余行选择并独立展示输出尺寸', !visible($('[aria-label="调整比例的牌面"]')) &&
+        visible(dimensions) && outputHas(h * 5.25, h));
+      $('[data-aspect-ratio="3"]').click();
+      ok('S50 快捷比例同步输入与输出尺寸且保留控件节点', Number(width.value) / Number(height.value) === 3 &&
+        outputHas(h * 3, h) && $('[data-aspect-width]') === width && $('[data-aspect-height]') === height && $('.aspect-dimensions') === dimensions);
+      height.value = '2'; height.dispatchEvent(new w.Event('change', { bubbles: true }));
+      width.value = '5'; width.dispatchEvent(new w.Event('change', { bubbles: true }));
+      ok('S50 自定义比例与重置操作同步尺寸输出', w.App.state.rows[0].widthRatio === 2.5 && outputHas(h * 2.5, h));
+      $('.aspect-reset').click();
+      ok('S50 恢复参考比例同步输入和输出', Number(width.value) / Number(height.value) === 5.25 && outputHas(h * 5.25, h));
+      $('#add-row-btn').click();
+      var rowSelect = $('[aria-label="调整比例的牌面"]'), secondId = w.App.state.rows[1].id;
+      ok('S50 同牌多行时提供当前调整行分组', visible(rowSelect) && rowSelect.options.length === 2);
+      rowSelect.value = secondId; rowSelect.dispatchEvent(new w.Event('change', { bubbles: true })); $('[data-aspect-ratio="1"]').click();
+      ok('S50 选择另一行只调整该行比例并同步该行输出', w.App.state.rows[0].widthRatio === 5.25 &&
+        w.App.state.rows[1].widthRatio === 1 && outputHas(h, h));
+      rowSelect.value = firstId; rowSelect.dispatchEvent(new w.Event('change', { bubbles: true }));
+      ok('S50 行切换回显原行比例与尺寸', Number($('[data-aspect-width]').value) / Number($('[data-aspect-height]').value) === 5.25 && outputHas(h * 5.25, h));
+      var svg = $('[data-export-row="svg"]'), png = $('[data-export-row="png"]');
+      ok('S50 简洁导出控件保留明确的可访问名称', /导出此牌.*SVG/.test(svg.getAttribute('aria-label') || svg.textContent) &&
+        /导出此牌.*PNG/.test(png.getAttribute('aria-label') || png.textContent));
+      $$('.row-del')[1].click();
+      ok('S50 删除多余空行后再次隐藏行选择分组', w.App.state.rows.length === 1 && !visible($('[aria-label="调整比例的牌面"]')));
+    }
+
+    function s51_platformDirectionLayouts() {
+      var w = W(), S = w.SignState;
+      w.App.select(null); w.App.update(function () { return S.createSign(); });
+      signSection('horizontal'); paletteTab('templates');
+      function center(el) { return el.props.box.x + el.props.box.width / 2; }
+      function withinBoard(row) {
+        return row.elements.every(function (el) {
+          var b = el.props.box;
+          return b && b.x >= -0.005 && b.y >= -0.005 && b.x + b.width <= row.widthRatio + 0.005 && b.y + b.height <= 1.005;
+        });
+      }
+      function backgroundAt(row, x) {
+        var color = row.backgroundColor || '#FFFFFF';
+        row.elements.forEach(function (el) {
+          var p = el.props, b = p.box;
+          if (el.type === 'shape' && p.shape === 'rect' && p.fill && p.fill !== 'none' && b &&
+            x >= b.x && x <= b.x + b.width && 0.01 >= b.y && 0.01 <= b.y + b.height) color = p.fill;
+        });
+        return color;
+      }
+      function dark(color) { return /^#[0-9a-f]{6}$/i.test(color) && [1, 3, 5].every(function (start) { return parseInt(color.slice(start, start + 2), 16) < 128; }); }
+      function arrow(row, direction) { return row.elements.filter(function (el) { return el.type === 'icon' && el.props.icon === 'arrow_' + direction; })[0]; }
+      function textPart(row, content) {
+        return row.elements.filter(function (el) { return el.type === 'plain-text' && el.props.text === content ||
+          el.type === 'bilingual-text' && (el.props.textZh === content || el.props.textEn === content); })[0];
+      }
+      $('[data-template-id="platform-direction-split"]').click();
+      var split = w.App.state.rows[0], ratio = split.widthRatio;
+      var left = textPart(split, '璧山方向'), right = textPart(split, '朝天门方向');
+      var digit = split.elements.filter(function (el) { return el.type === 'plain-text' && el.props.text === '1'; })[0];
+      var leftArrow = arrow(split, 'left'), rightArrow = arrow(split, 'right');
+      var theme = w.SignCore.lineColorFor('1', 'chongqing').bg;
+      ok('S51 岛式分向左右使用本线路主题红底、中心全高白底', backgroundAt(split, ratio * 0.1) === theme &&
+        backgroundAt(split, ratio * 0.9) === theme && backgroundAt(split, ratio * 0.5) === '#FFFFFF');
+      ok('S51 岛式分向白箭头和白字位于两侧，中央仅黑色大线号', !!(left && right && digit && leftArrow && rightArrow) &&
+        left.props.color === '#FFFFFF' && right.props.color === '#FFFFFF' && leftArrow.props.color === '#FFFFFF' && rightArrow.props.color === '#FFFFFF' &&
+        dark(digit.props.color) && digit.props.box.height > 0.5 && Math.abs(center(digit) - ratio / 2) < 0.05 &&
+        center(leftArrow) < center(left) && center(left) < center(digit) && center(digit) < center(right) && center(right) < center(rightArrow));
+      ok('S51 岛式分向不再有中间badge或Line1说明', split.elements.every(function (el) {
+        return el.type !== 'number-line' && el.type !== 'text-line' && el.type !== 'crt-sign';
+      }) && !/Line\s*1/.test($('#sign-svg').textContent) && withinBoard(split));
+      var bright = { widthRatio: ratio, elements: w.SignComposition.materialize('platform-direction-split', {
+        lineColorMode: 'custom', lineColor: '#F7D917',
+      }, w.App.measure) };
+      var brightLeft = textPart(bright, '璧山方向'), brightRight = textPart(bright, '朝天门方向');
+      ok('S51 亮黄线路主题底自动使用黑字与黑箭头，中央仍白底黑号', backgroundAt(bright, ratio * 0.1) === '#F7D917' &&
+        backgroundAt(bright, ratio * 0.9) === '#F7D917' && backgroundAt(bright, ratio / 2) === '#FFFFFF' &&
+        !!(brightLeft && brightRight && arrow(bright, 'left') && arrow(bright, 'right')) &&
+        dark(brightLeft.props.color) && dark(brightRight.props.color) && dark(arrow(bright, 'left').props.color) && dark(arrow(bright, 'right').props.color));
+
+      $('[data-template-id="platform-direction-multiline"]').click();
+      var multi = w.App.state.rows[0];
+      var loop = multi.elements.filter(function (el) { return el.type === 'text-line' && /环/.test(el.props.text) || el.type === 'plain-text' && el.props.text === '环'; })[0];
+      var five = multi.elements.filter(function (el) { return el.type === 'number-line' && el.props.lines.some(function (line) { return line.number === '5'; }) || el.type === 'plain-text' && el.props.text === '5'; })[0];
+      var leftDirection = textPart(multi, '沙坪坝方向'), rightDirection = textPart(multi, '大石坝方向');
+      var inner = textPart(multi, '内环'), innerEnglish = textPart(multi, 'Clockwise Loop');
+      var outer = multi.elements.filter(function (el) { return /外环|Outer Loop|Counterclockwise Loop/.test(el.props.text || el.props.textZh || el.props.textEn || ''); })[0];
+      leftArrow = arrow(multi, 'left'); rightArrow = arrow(multi, 'right');
+      ok('S51 同站台多线分向为白底黑字黑色外向箭头', backgroundAt(multi, multi.widthRatio / 2) === '#FFFFFF' &&
+        !!(leftDirection && rightDirection && leftArrow && rightArrow) && dark(leftDirection.props.color) && dark(rightDirection.props.color) &&
+        dark(leftArrow.props.color) && dark(rightArrow.props.color));
+      ok('S51 多线分向按两侧分配环线和5号线基础组合，不合并中央badge', !!(loop && five && leftDirection && rightDirection && leftArrow && rightArrow) &&
+        center(leftArrow) < center(loop) && center(loop) < center(leftDirection) && center(leftDirection) < center(rightDirection) &&
+        center(rightDirection) < center(five) && center(five) < center(rightArrow) &&
+        multi.elements.every(function (el) { return el.type !== 'crt-sign' && !/环\s*\/\s*5/.test(el.props.text || el.props.textZh || ''); }));
+      ok('S51 左侧内环英文小标题独立位于方向上方，右侧默认不额外添加外环', !!(inner && innerEnglish && leftDirection) && !outer &&
+        inner.props.box.y < leftDirection.props.box.y && inner.props.box.height < leftDirection.props.box.height && withinBoard(multi));
+      var colors = [w.SignCore.lineColorFor('环', 'chongqing').bg, w.SignCore.lineColorFor('5', 'chongqing').bg];
+      ok('S51 多线分向两侧线路保留各自配色而非共用中间色块', colors.every(function (color) {
+        return multi.elements.some(function (el) { return el.props.fill === color || el.props.blockColor === color ||
+          (el.props.lines || []).some(function (line) { return line.color === color; }); });
+      }));
+      var optional = w.SignComposition.materialize('platform-direction-multiline', {
+        fields: { rightQualifier: '外环', rightQualifierEn: 'Counterclockwise Loop' },
+      }, w.App.measure);
+      ok('S51 可选右侧小标题可由独立字段生成基础中英文元素', !!textPart({ elements: optional }, '外环') &&
+        !!textPart({ elements: optional }, 'Counterclockwise Loop'));
+      var editable = !!(inner && innerEnglish), editedIds = inner && innerEnglish ? [inner.id, innerEnglish.id] : [];
+      var others = JSON.stringify(multi.elements.filter(function (el) { return editedIds.indexOf(el.id) === -1; }));
+      function edit(el, value, english) {
+        var hit = $('g.element[data-element-id="' + el.id + '"] .hitbox'), r = rectOf(hit);
+        mouse('click', hit, r.x + r.w / 2, r.y + r.h / 2);
+        typeInto(el.type === 'plain-text' ? $('[aria-label="文字内容"]') : $(english ? '[placeholder="English text"]' : '[placeholder="中文文本"]'), value);
+      }
+      if (inner && innerEnglish) {
+        edit(inner, '内侧环线'); edit(innerEnglish, 'Inner Track', true);
+        var changed = S.findElement(w.App.state, inner.id).element, changedEn = S.findElement(w.App.state, innerEnglish.id).element;
+        editable = (changed.props.text || changed.props.textZh) === '内侧环线' && (changedEn.props.text || changedEn.props.textEn) === 'Inner Track' &&
+          JSON.stringify(w.App.state.rows[0].elements.filter(function (el) { return editedIds.indexOf(el.id) === -1; })) === others;
+      }
+      ok('S51 小标题中英文可分别修改且不回滚其他线路元素', editable);
+      var restored = S.deserializeSign(S.serializeSign(w.App.state));
+      ok('S51 两类分向牌均独立保留，项目恢复不丢自由定位或小标题', boards().length === 2 &&
+        w.SignWorkspace.list(restored).every(function (board) { return board.sign.rows.length === 1 && withinBoard(board.sign.rows[0]); }) &&
+        !!inner && (S.findElement(restored, inner.id).element.props.text || S.findElement(restored, inner.id).element.props.textZh) === '内侧环线');
+    }
+
+    function s52_transferPortalPresets() {
+      var w = W(), S = w.SignState;
+      w.App.select(null); w.App.update(function () { return S.createSign(); });
+      function text(row, content) { return row.elements.filter(function (el) { return el.type === 'plain-text' && el.props.text === content ||
+        el.type === 'bilingual-text' && (el.props.textZh === content || el.props.textEn === content); })[0]; }
+      function x(el) { return el.props.box.x + el.props.box.width / 2; }
+      function y(el) { return el.props.box.y + el.props.box.height / 2; }
+      function tint(color) { return '#' + [1, 3, 5].map(function (index) { return Math.round(parseInt(color.slice(index, index + 2), 16) * 0.3 + 255 * 0.7).toString(16).padStart(2, '0'); }).join('').toUpperCase(); }
+      function block(row, color, number) {
+        return row.elements.filter(function (el) {
+          var b = el.props.box, n = number && number.props.box;
+          return el.type === 'shape' && el.props.shape === 'rect' && el.props.fill === color && b && n &&
+            n.x >= b.x - 0.005 && n.y >= b.y - 0.005 && n.x + n.width <= b.x + b.width + 0.005 && n.y + n.height <= b.y + b.height + 0.005;
+        })[0];
+      }
+      function primitive(row) { return row.layout === 'free' && row.elements.every(function (el) {
+        var b = el.props.box; return el.type !== 'crt-sign' && b && b.x >= -0.005 && b.y >= -0.005 && b.x + b.width <= row.widthRatio + 0.005 && b.y + b.height <= 1.005;
+      }); }
+      signSection('horizontal'); paletteTab('templates');
+      var search = $('.crt-toolbar input'); typeInto(search, '换乘通道');
+      var doorhead = $('[data-template-id="transfer-doorhead"]');
+      ok('S52 搜索换乘通道可在横牌找到门套横梁入口', !!doorhead && doorhead.textContent.indexOf('横梁') !== -1);
+      typeInto(search, '');
+      var savedHead = null;
+      if (doorhead) {
+        $('[data-template-id="transfer-doorhead"]').click();
+        var row = w.App.state.rows[0], title = text(row, '换乘'), digit = text(row, '5'), label = text(row, '号线');
+        var color = w.SignCore.lineColorFor('5', 'chongqing').bg, rectangle = block(row, color, digit);
+        ok('S52 实物参考横梁为换乘、主题色块大5、号线横排且没有箭头', !!(title && digit && label && rectangle && text(row, 'Transfer') && text(row, 'Line')) &&
+          x(title) < x(digit) && x(digit) < x(label) && digit.props.color === w.SignCore.contrastTextColor(color) &&
+          row.elements.every(function (el) { return el.type !== 'icon' || !/^arrow_/.test(el.props.icon); }) && primitive(row));
+        ok('S52 新横梁来源注明实物补充且不冒称PDF示例', /实物|照片/.test(w.SignCRT.get('transfer-doorhead').source.note || ''));
+        if (digit) {
+          var others = JSON.stringify(row.elements.filter(function (el) { return el.id !== digit.id; }));
+          var hit = $('g.element[data-element-id="' + digit.id + '"] .hitbox'), bounds = rectOf(hit);
+          mouse('click', hit, bounds.x + bounds.w / 2, bounds.y + bounds.h / 2); typeInto($('[aria-label="文字内容"]'), '8');
+          savedHead = { id: digit.id, sourceId: w.App.state.workspace.activeId };
+          ok('S52 横梁大号可以单独编辑且不改变标签或色块', S.findElement(w.App.state, digit.id).element.props.text === '8' &&
+            JSON.stringify(w.App.state.rows[0].elements.filter(function (el) { return el.id !== digit.id; })) === others);
+        } else ok('S52 横梁大号可以单独编辑且不改变标签或色块', false);
+      } else {
+        ok('S52 实物参考横梁为换乘、主题色块大5、号线横排且没有箭头', false);
+        ok('S52 新横梁来源注明实物补充且不冒称PDF示例', false);
+        ok('S52 横梁大号可以单独编辑且不改变标签或色块', false);
+      }
+      signSection('vertical'); typeInto(search, '换乘通道');
+      ok('S52 同一搜索在竖牌给出单线与多线门套立柱入口', !!$('[data-template-id="transfer-doorpost"]') &&
+        !!$('[data-template-id="transfer-doorpost-multiline"]') && $$('.crt-grid [data-template-id]').every(function (card) { return card.textContent.indexOf('立柱') !== -1; }));
+      typeInto(search, ''); $('[data-template-id="transfer-doorpost"]').click();
+      var single = w.App.state.rows[0], three = text(single, '3'), title = text(single, '换乘'), label = text(single, '号线');
+      var up = single.elements.filter(function (el) { return el.type === 'icon' && el.props.icon === 'arrow_up'; })[0];
+      var threeColor = w.SignCore.lineColorFor('3', 'chongqing').bg;
+      ok('S52 单线门套立柱用30%线路浅底与独立主题色大号块', !!(three && title && label && up && block(single, threeColor, three)) &&
+        three.props.color === w.SignCore.contrastTextColor(threeColor) && single.elements.some(function (el) { return el.props.fill === tint(threeColor); }) &&
+        y(up) < y(title) && y(title) < y(three) && y(three) < y(label) && primitive(single));
+      $('[data-template-id="transfer-doorpost-multiline"]').click();
+      var multi = w.App.state.rows[0], digits = ['1', '2', '6'].map(function (value) { return text(multi, value); });
+      ok('S52 多线门套立柱每个大号都有自己的完整线路色块与对比色字', digits.every(function (digit, index) {
+        var color = w.SignCore.lineColorFor(['1', '2', '6'][index], 'chongqing').bg;
+        return digit && block(multi, color, digit) && digit.props.color === w.SignCore.contrastTextColor(color);
+      }) && y(digits[0]) < y(digits[1]) && y(digits[1]) < y(digits[2]) && !!text(multi, '号线') && !!text(multi, 'Line 1/2/6') && primitive(multi));
+      var restored = S.deserializeSign(S.serializeSign(w.App.state));
+      ok('S52 横梁和两种立柱保存为三块独立牌且保留基础编辑', !!savedHead && boards().length === 3 &&
+        w.SignWorkspace.list(restored).some(function (board) { var found = S.findElement(board.sign, savedHead.id); return found && found.element.props.text === '8'; }));
+      signSection('horizontal'); paletteTab('basic');
+    }
+
+    function s53_liveBackgroundContrast() {
+      var w = W(), S = w.SignState;
+      w.App.select(null); w.App.update(function () { return S.createSign(); });
+      signSection('horizontal'); paletteTab('templates'); $('[data-template-id="platform-direction-split"]').click();
+      var row = w.App.state.rows[0], title = row.elements.filter(function (el) { return el.props.text === '璧山方向' || el.props.textZh === '璧山方向'; })[0];
+      var source = title && row.elements.filter(function (el) { return el.id === title.props.contrastSourceId; })[0];
+      function pick(el) { var hit = $('g.element[data-element-id="' + el.id + '"] .hitbox'), r = rectOf(hit); mouse('click', hit, r.x + r.w / 2, r.y + r.h / 2); }
+      var linked = !!source;
+      if (source) {
+        pick(source); typeInto($('#right-panel-body .hex-input'), '#F7D917');
+        linked = w.App.state.rows[0].elements.filter(function (el) { return el.props.contrastSourceId === source.id; }).every(function (el) { return el.props.color === '#000000'; }) &&
+          w.App.state.rows[0].elements.filter(function (el) { return el.type === 'icon' && /^arrow_/.test(el.props.icon); }).every(function (el) { return el.props.color === '#000000'; }) &&
+          w.App.state.rows[0].elements.some(function (el) { return el.type === 'plain-text' && el.props.text === '1' && el.props.color === '#000000'; });
+      }
+      ok('S53 实际选背景改成亮黄时文字箭头同步变黑且中央黑号保留', linked);
+      var restored = false;
+      if (title && source) {
+        pick(title); typeInto($('#right-panel-body .hex-input'), '#FF00FF');
+        var toggle = $('[data-auto-contrast]'), manual = S.findElement(w.App.state, title.id).element.props;
+        var pinned = toggle && !toggle.checked && manual.color === '#FF00FF';
+        if (toggle) toggle.click();
+        var current = S.findElement(w.App.state, title.id).element.props;
+        restored = pinned && toggle.checked && current.autoContrast === true && current.color === '#000000';
+      }
+      ok('S53 手改文字颜色暂停自动黑白，重新勾选立即恢复背景对比色', restored);
+    }
+
+    function s54_namedSwatchesChooseLine() {
+      var w = W(), S = w.SignState;
+      w.App.select(null); w.App.update(function () { return S.createSign(); });
+      function input(selector, value) { typeInto($(selector), value); }
+      function source(value) { var select = $('#right-panel-body .cp-city-select'); select.value = value; select.dispatchEvent(new w.Event('change', { bubbles: true })); }
+      function add(name) {
+        $$('[data-palette-pane="basic"] .palette-card').filter(function (card) { return card.querySelector('.card-name').textContent === name; })[0].click();
+        var el = w.App.state.rows[w.App.state.rows.length - 1].elements.slice(-1)[0], hit = $('g.element[data-element-id="' + el.id + '"] .hitbox'), r = rectOf(hit);
+        mouse('click', hit, r.x + r.w / 2, r.y + r.h / 2); return el.id;
+      }
+      function props(id) { return S.findElement(w.App.state, id).element.props; }
+      $('[data-route-manager]').click();
+      [['2号线', 'Teal Line Two', '#00B5AD'], ['云间线', 'Cloud Line', '#123456']].forEach(function (line) {
+        $('[data-route-action="new"]').click(); input('[data-route-field="nameZh"]', line[0]); input('[data-route-field="nameEn"]', line[1]);
+        input('[data-route-field="colorHex"]', line[2]); $('[data-route-action="save"]').click();
+      });
+      $('[aria-label="关闭线路管理"]').click(); signSection('horizontal'); paletteTab('basic');
+      var numberId = add('数字线路'); $('.le-add').click(); source('fictional');
+      var entries = $$('#right-panel-body .line-entry'), nodes = $$('.le-number'), first = JSON.stringify(props(numberId).lines[0]);
+      var named = entries[1].querySelector('.cp-swatch[data-color="#00B5AD"]');
+      if (named) named.click();
+      ok('S54 点击我的2号线色块同时填写对应编号和色而不改变另一条线路', !!named && props(numberId).lines[1].number === '2' &&
+        props(numberId).lines[1].color === '#00B5AD' && JSON.stringify(props(numberId).lines[0]) === first && named.dataset.lineMarker === '2');
+      ok('S54 named色块选择即时回显编号且保留两个输入框节点', $$('.le-number')[0] === nodes[0] && $$('.le-number')[1] === nodes[1] && nodes[1].value === '2');
+      var retained = true;
+      ['#F7D917', '#424A52', '#000000', '#FFFFFF'].forEach(function (color) {
+        var swatch = $$('#right-panel-body .line-entry')[1].querySelector('.cp-swatch[data-color="' + color + '"]');
+        if (swatch) swatch.click();
+        retained = retained && !!swatch && props(numberId).lines[1].number === '2' && props(numberId).lines[1].color === color;
+      });
+      typeInto($$('#right-panel-body .line-entry')[1].querySelector('.hex-input'), '#AA00AA');
+      ok('S54 通用黄灰黑白与HEX仅改颜色而不覆盖线路编号', retained && props(numberId).lines[1].number === '2' && props(numberId).lines[1].color === '#AA00AA');
+      source('shanghai'); typeInto($$('.le-number')[1], '9');
+      var cityColor = w.SignCore.lineColorFor('2', 'shanghai').bg;
+      $$('#right-panel-body .line-entry')[1].querySelector('.cp-swatch[data-color="' + cityColor + '"]').click();
+      ok('S54 城市唯一线路色块也可明确选中对应线路号', props(numberId).lines[1].number === '2' && props(numberId).lines[1].color === cityColor);
+      source('chongqing'); typeInto($$('.le-number')[1], '7');
+      var shared = $$('#right-panel-body .line-entry')[1].querySelector('.cp-swatch[data-color="#0057B7"]'); shared.click();
+      ok('S54 重庆多线路共色不猜测号码，仅改色并保留现有7号', props(numberId).lines[1].number === '7' &&
+        props(numberId).lines[1].color === '#0057B7' && Number(shared.dataset.lineCount) > 1);
+      var textId = add('文本线路'); source('fictional');
+      var textNode = $('[placeholder="如：环 / 机场联络线"]'), englishNode = $('[placeholder="如：Loop Line"]');
+      var blockPicker = $$('#right-panel-body .color-picker')[0];
+      blockPicker.querySelector('.cp-swatch[data-color="#123456"]').click();
+      ok('S54 文本线路点击自建named色块填写中文英文与主题色且不重建输入框', props(textId).text === '云间' &&
+        props(textId).textEn === 'Cloud Line' && props(textId).blockColor === '#123456' &&
+        $('[placeholder="如：环 / 机场联络线"]') === textNode && $('[placeholder="如：Loop Line"]') === englishNode);
+      var foreground = $$('#right-panel-body .color-picker')[1]; foreground.querySelector('.cp-swatch[data-color="#00B5AD"]').click();
+      ok('S54 前景文字色picker里的named色块只改前景色不切换线路身份', props(textId).text === '云间' &&
+        props(textId).textEn === 'Cloud Line' && props(textId).blockColor === '#123456' && props(textId).textColor === '#00B5AD');
+    }
+
+    async function s55_fourSidedEntryEditor() {
+      var w = W(), S = w.SignState;
+      w.App.select(null); w.App.update(function () { return S.createSign(); });
+      signSection('horizontal'); paletteTab('templates'); $('[data-template-id="four-sided-guide"]').click();
+      var entryButton = $('[data-four-sided-edit]'), initial = w.App.state.rows[0];
+      ok('S55 四方体预设提供逐排编辑入口并保存三排模型', !!entryButton && initial.fourSided && initial.fourSided.entries.length === 3);
+      if (!entryButton || !initial.fourSided || !w.App.state.workspace) return;
+      var boardId = w.App.state.workspace.activeId, initialRatio = initial.widthRatio;
+      entryButton.click();
+      function row() { return w.App.state.rows[0]; }
+      function entries() { return row().fourSided.entries; }
+      function card(id) { return $('[data-four-sided-entry="' + id + '"]'); }
+      function count(value) { var input = $('[data-four-sided-count]'); input.value = String(value); input.dispatchEvent(new w.Event('change', { bubbles: true })); }
+      ok('S55 逐排编辑器为独立模态且与预览显示相同排数', !!$('.four-sided-modal') && $$('[data-four-sided-entry]').length === 3 && Number($('[data-four-sided-count]').value) === 3);
+      count(4);
+      var order = entries().map(function (entry) { return entry.id; }), editedId = order[1];
+      ok('S55 从三排改为四排即时更新基础组合并保持每排比例', entries().length === 4 && $$('[data-four-sided-entry]').length === 4 &&
+        Math.abs(row().widthRatio - initialRatio * 3 / 4) < 0.00001 && row().elements.every(function (el) { return el.type !== 'crt-sign'; }));
+      var field = card(editedId).querySelector('[data-four-sided-field="leftZh"]'), cardNode = card(editedId);
+      typeInto(field, '星港方向');
+      typeInto(card(editedId).querySelector('[data-four-sided-field="leftEn"]'), 'To Star Harbor');
+      typeInto(card(editedId).querySelector('[data-four-sided-field="line"]'), '2');
+      ok('S55 连续编辑同排中文英文线路保持输入节点与其他排内容', card(editedId) === cardNode &&
+        card(editedId).querySelector('[data-four-sided-field="leftZh"]') === field && entries()[1].leftZh === '星港方向' &&
+        entries()[1].leftEn === 'To Star Harbor' && entries()[1].line === '2' && $('#sign-svg').textContent.indexOf('星港方向') !== -1 &&
+        entries()[0].id === order[0] && entries()[2].id === order[2]);
+      card(editedId).querySelector('[data-four-sided-action="up"]').click();
+      var up = entries()[0].id === editedId && entries()[0].leftZh === '星港方向';
+      card(editedId).querySelector('[data-four-sided-action="down"]').click();
+      ok('S55 上下移动按稳定排ID移动整排且不丢编辑内容', up && entries().map(function (entry) { return entry.id; }).join() === order.join() &&
+        card(editedId).querySelector('[data-four-sided-field="leftZh"]').value === '星港方向');
+      card(order[2]).querySelector('[data-four-sided-action="remove"]').click();
+      ok('S55 可删除指定排且保留其他排ID和已编辑文字', entries().length === 3 && !card(order[2]) &&
+        entries().some(function (entry) { return entry.id === editedId && entry.leftZh === '星港方向'; }));
+      $('[data-four-sided-add]').click();
+      ok('S55 新增排不复用既有ID且预览排数同步', entries().length === 4 && new Set(entries().map(function (entry) { return entry.id; })).size === 4 &&
+        $$('[data-four-sided-entry]').length === 4);
+      var editable = card(editedId).querySelector('[data-four-sided-field="leftZh"]');
+      editable.dispatchEvent(new w.CompositionEvent('compositionstart', { bubbles: true, data: 'xing' }));
+      editable.dispatchEvent(new w.KeyboardEvent('keydown', { key: 'Escape', isComposing: true, bubbles: true, cancelable: true }));
+      editable.dispatchEvent(new w.CompositionEvent('compositionend', { bubbles: true }));
+      var mask = $('.four-sided-modal').closest('.modal-mask'); mouse('click', mask, 1, 1);
+      ok('S55 中文候选Escape和遮罩误点均不关闭逐排编辑器', !!$('.four-sided-modal') && entries().length === 4);
+      var expected = JSON.stringify(entries()); $('[data-four-sided-done]').click(); $('[data-four-sided-edit]').click();
+      ok('S55 完成后重开与JSON恢复都保留排顺序和值', JSON.stringify(entries()) === expected &&
+        JSON.stringify(S.deserializeSign(S.serializeSign(w.App.state)).rows[0].fourSided.entries) === expected);
+      $('[aria-label="关闭逐排编辑"]').click();
+      $('.row-band[data-row-index="0"] .row-actions button').click(); $('.modal-input').value = '四方体逐排回归'; await modalAct('ok');
+      var preset = w.SignPresets.list().filter(function (item) { return item.name === '四方体逐排回归'; }).pop();
+      paletteTab('presets'); $$('.preset-card').filter(function (node) { return node.textContent.indexOf('四方体逐排回归') !== -1; })[0].click(); $('[data-preset-use]').click();
+      ok('S55 个人预设复用保留逐排编辑能力且生成独立牌', boards().length === 2 && w.App.state.workspace.activeId !== boardId &&
+        row().fourSided && row().fourSided.entries.length === 4 && row().fourSided.entries.some(function (entry) { return entry.leftZh === '星港方向' && entry.line === '2'; }) &&
+        !!$('[data-four-sided-edit]'));
+      w.SignPresets.remove(preset.id); paletteTab('basic');
+    }
+
+    function s56_contextSingleEntryAspect() {
+      var w = W(), S = w.SignState;
+      w.App.select(null); w.App.update(function () { return S.createSign(); });
+      $('[data-route-manager]').click(); $('[data-route-action="new"]').click();
+      typeInto($('[data-route-field="nameZh"]'), '单排比例回归线'); typeInto($('[data-route-field="nameEn"]'), 'Single Row Line');
+      var stations = $$('[data-route-station]');
+      typeInto(stations[0].querySelector('[data-station-field="nameZh"]'), '星港');
+      typeInto(stations[0].querySelector('[data-station-field="nameEn"]'), 'Star Harbor');
+      typeInto(stations[stations.length - 1].querySelector('[data-station-field="nameZh"]'), '云谷');
+      typeInto(stations[stations.length - 1].querySelector('[data-station-field="nameEn"]'), 'Cloud Valley');
+      $('[data-route-action="context"]').click(); $('[data-template-id="four-sided-guide"]').click();
+      var row = w.App.state.rows[0], metadata = row.fourSided, reference = metadata && metadata.referenceRowRatio;
+      var contained = row.elements.every(function (el) {
+        var box = el.props.box; return box && box.x >= -0.005 && box.y >= -0.005 && box.x + box.width <= row.widthRatio + 0.005 && box.y + box.height <= 1.005;
+      });
+      var slots = w.App.layout.rows[0].elements.filter(function (slot) {
+        var el = S.findElement(w.App.state, slot.id).element; return el.type === 'icon' || el.type === 'bilingual-text';
+      });
+      ok('S56 当前线路初加四方体单排使用单排参考比例，基础图文不被旧三排宽度压缩', metadata && metadata.entries.length === 1 &&
+        Math.abs(row.widthRatio - reference) < 0.00001 && Math.abs(row.referenceWidthRatio - reference) < 0.00001 &&
+        contained && slots.length > 0 && slots.every(function (slot) { return slot.scale >= 0.95; }),
+        'entries=' + (metadata && metadata.entries.length) + ' ratio=' + row.widthRatio + ' reference=' + row.referenceWidthRatio +
+          ' single=' + reference + ' contained=' + contained + ' scales=' + slots.map(function (slot) { return slot.scale; }).join(','));
+    }
+
+    async function s57_publicServerLines() {
+      var w = W(), S = w.SignState, Routes = w.SignRoutes;
+      w.App.select(null); w.App.update(function () { return S.createSign(); });
+      signSection('horizontal'); paletteTab('basic');
+      var autoField = $$('#right-panel-body .field-inline').filter(function (field) { return field.textContent.indexOf('自动匹配线路色') !== -1; })[0];
+      var auto = autoField && autoField.querySelector('input'); if (auto && !auto.checked) auto.click();
+      $('[data-route-manager]').click();
+      var sourceSelect = $('[data-route-source]');
+      ok('S57 线路管理提供相互独立的我的线路和服务器线路来源', sourceSelect &&
+        sourceSelect.querySelector('option[value="local"]') && sourceSelect.querySelector('option[value="server"]'));
+      ok('S57 公共线路提供手动刷新、更新状态及管理员列表导出',
+        !!$('[data-route-action="refresh-server"]') && !!$('[data-server-lines-status]') && !!$('[data-route-action="export-catalog"]'));
+      var canRefresh = !!(w.SignLineCatalog && w.SignPanel && typeof w.SignPanel.refreshServerLines === 'function');
+      ok('S57 公共线路读取模块与可等待的刷新入口已就绪', canRefresh);
+      if (!sourceSelect || !canRefresh) { $('[aria-label="关闭线路管理"]').click(); return; }
+      function choose(selector, value) { var node = $(selector); node.value = value; node.dispatchEvent(new w.Event('change', { bubbles: true })); }
+      function input(selector, value) { typeInto($(selector), value); }
+      function closeManager() { $('[aria-label="关闭线路管理"]').click(); }
+      function openManager() { $('[data-route-manager]').click(); }
+      function choosePublic(id) { choose('[data-route-source]', 'server'); choose('[data-route-library]', id); }
+      function swatch(name, color) { return $$('#right-panel-body .cp-swatch').some(function (node) {
+        return node.dataset.color === color && (node.title + node.textContent).indexOf(name) !== -1;
+      }); }
+      function currentProps(id) { return S.findElement(w.App.state, id).element.props; }
+      function addNumber() {
+        $$('[data-palette-pane="basic"] .palette-card').filter(function (node) { return node.querySelector('.card-name').textContent === '数字线路'; })[0].click();
+        var elements = w.App.state.rows[w.App.state.rows.length - 1].elements, id = elements[elements.length - 1].id;
+        w.App.select(id); return id;
+      }
+      choose('[data-route-source]', 'local'); $('[data-route-action="new"]').click();
+      input('[data-route-field="nameZh"]', '71号线'); input('[data-route-field="nameEn"]', 'Local Seventy One');
+      input('[data-route-field="colorHex"]', '#6C3483'); input('[data-route-station] [data-station-field="transfers"]', '72号线');
+      $('[data-route-action="save"]').click();
+      var local = Routes.list().filter(function (line) { return line.nameEn === 'Local Seventy One'; }).pop();
+      $('[data-route-action="new"]').click(); input('[data-route-field="nameZh"]', '72号线');
+      input('[data-route-field="nameEn"]', 'Local Seventy Two'); input('[data-route-field="colorHex"]', '#7648B4');
+      $('[data-route-action="save"]').click();
+      var localTwo = Routes.list().filter(function (line) { return line.nameEn === 'Local Seventy Two'; }).pop();
+      var localBefore = JSON.stringify(Routes.list()); closeManager();
+      var publicOne = Routes.normalizeLine(w.JSON.parse(JSON.stringify(Object.assign({}, local, { nameEn: 'Server Seventy One', color: '#008C95',
+        stations: [{ id: 'server-71-a', nameZh: '公共总站', nameEn: 'Public Terminal', code: '7101', transfers: '72号线' },
+          { id: 'server-71-b', nameZh: '公共终点', nameEn: 'Public End', code: '7102', transfers: '' }], currentStationId: 'server-71-a' }))));
+      var publicTwo = Routes.normalizeLine(w.JSON.parse(JSON.stringify({ id: localTwo.id, nameZh: '72号线', nameEn: 'Server Seventy Two', color: '#E67E22',
+        stations: [{ id: 'server-72-a', nameZh: '公共换乘站', nameEn: 'Public Interchange', code: '7201', transfers: '71号线' },
+          { id: 'server-72-b', nameZh: '公共南站', nameEn: 'Public South', code: '7202', transfers: '' }], currentStationId: 'server-72-a' })));
+      var catalog = { format: 'railway-line-catalog', version: 1, updatedAt: '2026-10-23T08:00:00Z', lines: [publicOne, publicTwo] };
+      var realFetch = w.fetch, originalDownload = w.SignStorage.download, requests = [], responseMode = 'ok', captured = null;
+      w.fetch = function (url, options) {
+        if (/\/data\/lines\.json(?:[?#]|$)/.test(new w.URL(String(url), w.location.href).pathname)) {
+          requests.push({ method: options && options.method || 'GET', cache: options && options.cache });
+          return Promise.resolve(new w.Response(responseMode === 'error' ? 'temporary failure' : JSON.stringify(catalog),
+            { status: responseMode === 'error' ? 503 : 200, headers: { 'Content-Type': 'application/json' } }));
+        }
+        return realFetch.call(w, url, options);
+      };
+      try {
+        var numberId = addNumber(), numberInput = $('.le-number'), cityInput = $('#right-panel-body .cp-city-select');
+        await w.SignPanel.refreshServerLines();
+        ok('S57 手动刷新公共列表发起不缓存的只读请求', requests.length > 0 && requests.every(function (request) { return request.method === 'GET' && request.cache === 'no-store'; }));
+        var serverOption = cityInput.querySelector('option[value="server"]');
+        ok('S57 配色来源单列服务器线路并显示公共线路名和本色', !!serverOption && serverOption.textContent.indexOf('服务器线路') !== -1);
+        if (serverOption) choose('#right-panel-body .cp-city-select', 'server');
+        var publicSwatch = $$('#right-panel-body .lines-editor .cp-swatch').filter(function (node) { return node.dataset.lineMarker === '72'; })[0];
+        if (publicSwatch) publicSwatch.click();
+        ok('S57 点击唯一服务器线路色块同时填写线路号与本线颜色', !!publicSwatch && currentProps(numberId).lines[0].number === '72' &&
+          currentProps(numberId).lines[0].color === '#E67E22' && $('.le-number') === numberInput);
+        var generic = $('#right-panel-body .lines-editor .cp-swatch[data-color="#000000"]'); if (generic) generic.click();
+        ok('S57 服务器色板通用色仍只改颜色不改线路文字', !!generic && currentProps(numberId).lines[0].number === '72' && currentProps(numberId).lines[0].color === '#000000');
+        input('.le-number', '71');
+        ok('S57 公共颜色源按服务器线路匹配编号且不污染本地同名线路', currentProps(numberId).lines[0].color === '#008C95' &&
+          swatch('71号线', '#008C95') && swatch('72号线', '#E67E22') && JSON.stringify(Routes.list()) === localBefore);
+        choose('#right-panel-body .cp-city-select', 'fictional'); input('.le-number', '71');
+        ok('S57 我的线路配色仍使用本地同名线路，不被公共同ID记录覆盖', currentProps(numberId).lines[0].color === '#6C3483');
+        choose('#right-panel-body .cp-city-select', 'server');
+        openManager(); choosePublic(local.id);
+        ok('S57 选择服务器线路载入完整站表并展示更新时间', $('[data-route-field="nameEn"]').value === 'Server Seventy One' &&
+          $('[data-route-station] [data-station-field="nameZh"]').value === '公共总站' && /2026.*10.*23/.test($('[data-server-lines-status]').textContent));
+        input('[data-route-field="nameEn"]', 'Unsaved Public Draft'); closeManager(); openManager();
+        var draftInput = $('[data-route-field="nameEn"]'), reopenedDraft = draftInput.value === 'Unsaved Public Draft';
+        catalog = Object.assign({}, catalog, { updatedAt: '2026-10-24T09:30:00Z', lines: [Object.assign({}, publicOne, { color: '#005CBB' }), publicTwo] });
+        var previousRequests = requests.length;
+        $('[data-route-action="refresh-server"]').click();
+        await waitFor(function () { return requests.length > previousRequests && /2026.*10.*24/.test($('[data-server-lines-status]').textContent); });
+        ok('S57 新版本刷新更新日期与色板，保持当前草稿和输入框节点', $('[data-route-field="nameEn"]') === draftInput && draftInput.value === 'Unsaved Public Draft' &&
+          $('.le-number') === numberInput && $('#right-panel-body .cp-city-select') === cityInput && swatch('71号线', '#005CBB'));
+        ok('S57 公共草稿关闭重开后仍保留未保存内容，刷新不会覆盖', reopenedDraft && $('[data-route-field="nameEn"]').value === 'Unsaved Public Draft',
+          'reopened=' + reopenedDraft + ' name=' + $('[data-route-field="nameEn"]').value);
+        choose('[data-route-source]', 'local'); choose('[data-route-source]', 'server');
+        var returnedDraft = $('[data-route-field="nameEn"]').value === 'Unsaved Public Draft';
+        await w.SignPanel.refreshServerLines();
+        ok('S57 公共草稿切换本地来源再返回后仍视为未保存，刷新不会覆盖', returnedDraft &&
+          $('[data-route-field="nameEn"]').value === 'Unsaved Public Draft' && $('[data-route-library]').value === '',
+          'returned=' + returnedDraft + ' name=' + $('[data-route-field="nameEn"]').value + ' selected=' + $('[data-route-library]').value);
+        choose('[data-route-library]', publicTwo.id); choose('[data-route-library]', local.id);
+        ok('S57 刷新后明确重选公共线路取得最新服务器版本', $('[data-route-field="colorHex"]').value === '#005CBB' && $('[data-route-field="nameEn"]').value === 'Server Seventy One');
+        input('[data-route-station] [data-station-field="nameZh"]', '仅本次使用站');
+        $('[data-route-action="context"]').click();
+        ok('S57 使用公共线路制作标识保留编辑快照而不自动写入本地库', w.App.state.context &&
+          w.App.state.context.line.color === '#005CBB' && w.App.state.context.line.stations[0].nameZh === '仅本次使用站' &&
+          w.App.prefs.paletteCity === 'server' && JSON.stringify(Routes.list()) === localBefore);
+        choose('#right-panel-body .cp-city-select', 'fictional'); openManager();
+        var contextSourcePinned = $('[data-route-source]').value === 'server';
+        ok('S57 使用公共线路后手改配色来源不改变线路数据来源', contextSourcePinned,
+          'palette=' + w.App.prefs.paletteCity + ' context=' + JSON.stringify(w.App.state.context && w.App.state.context.source));
+        choose('[data-route-source]', 'local'); choose('[data-route-library]', local.id); $('[data-route-action="save"]').click();
+        ok('S57 保存同ID本地线路不会静默替换公共当前线路或其来源', w.App.state.context.source === 'server' &&
+          w.App.state.context.line.color === '#005CBB' && w.App.state.context.line.stations[0].nameZh === '仅本次使用站');
+        var localForImport = Routes.list().filter(function (line) { return line.id === local.id; })[0];
+        var transfer = new w.DataTransfer();
+        transfer.items.add(new w.File([Routes.serialize(localForImport)], 'local-71.railway-line.json', { type: 'application/json' }));
+        var routeFile = $('[data-route-file]'); routeFile.files = transfer.files; routeFile.dispatchEvent(new w.Event('change', { bubbles: true }));
+        await waitFor(function () { return /已导入/.test($('.route-status').textContent); });
+        ok('S57 导入同ID本地线路也不会静默切换公共当前线路', /已导入/.test($('.route-status').textContent) &&
+          w.App.state.context.source === 'server' && w.App.state.context.line.color === '#005CBB');
+        localBefore = JSON.stringify(Routes.list()); closeManager();
+        openManager(); choosePublic(publicTwo.id); $('[data-route-action="apply"]').click();
+        ok('S57 公共线路图可放入独立牌面且不隐式保存到本地', w.App.state.rows[0].route &&
+          w.App.state.rows[0].route.line.id === publicTwo.id && w.App.state.rows[0].route.source === 'server' && JSON.stringify(Routes.list()) === localBefore);
+        var restoredPublic = S.deserializeSign(S.serializeSign(w.App.state));
+        ok('S57 项目JSON往返保留公共当前线路与线路图来源，配色偏好不会代替来源', restoredPublic.context &&
+          restoredPublic.context.source === 'server' && restoredPublic.rows[0].route.source === 'server' &&
+          restoredPublic.context.line.id === local.id && restoredPublic.rows[0].route.line.id === publicTwo.id);
+        choose('#right-panel-body .cp-city-select', 'chongqing'); openManager();
+        var copySourcePinned = $('[data-route-source]').value === 'server';
+        $('[data-route-action="save"]').click();
+        var copied = Routes.list().filter(function (line) { return line.nameEn === 'Server Seventy One'; }).pop();
+        ok('S57 手选城市配色后显式保存公共线路仍另存新ID副本并保留原本地线路', copySourcePinned && copied && copied.id !== local.id && copied.color === '#005CBB' &&
+          Routes.list().some(function (line) { return line.id === local.id && line.nameEn === 'Local Seventy One' && line.color === '#6C3483'; }),
+          'sourcePinned=' + copySourcePinned + ' copied=' + JSON.stringify(copied));
+        choose('[data-route-source]', 'server');
+        responseMode = 'error'; previousRequests = requests.length;
+        $('[data-route-action="refresh-server"]').click();
+        await waitFor(function () { return requests.length > previousRequests && /失败|无法|错误/.test($('[data-server-lines-status]').textContent); });
+        ok('S57 公共服务失败明确提示并保留上次成功列表', /失败|无法|错误/.test($('[data-server-lines-status]').textContent) &&
+          $('[data-route-library]').querySelector('option[value="' + publicTwo.id + '"]'));
+        choose('[data-route-source]', 'local'); choose('[data-route-library]', local.id);
+        ok('S57 网络失败时本地线路仍可正常选择和编辑', $('[data-route-field="nameEn"]').value === 'Local Seventy One' && $('[data-route-field="colorHex"]').value === '#6C3483');
+        input('[data-route-field="nameZh"]', '未保存不应发布');
+        w.SignStorage.download = function (blob, name) { captured = { blob: blob, name: name }; };
+        $('[data-route-action="export-catalog"]').click();
+        var exported = captured && JSON.parse(await captured.blob.text()), savedLines = Routes.list();
+        ok('S57 管理员导出lines.json仅收录本地已保存线路，不混入未保存草稿或公共库', captured && captured.name === 'lines.json' &&
+          exported && exported.format === 'railway-line-catalog' && exported.version === 1 && exported.lines.length === savedLines.length &&
+          exported.lines.every(function (line) { return savedLines.some(function (saved) { return saved.id === line.id && saved.nameZh === line.nameZh && saved.color === line.color; }); }) &&
+          !exported.lines.some(function (line) { return line.nameZh === '未保存不应发布'; }));
+        var exportedOne = exported && exported.lines.filter(function (line) { return line.id === local.id; })[0];
+        var exportedTwo = exported && exported.lines.filter(function (line) { return line.id === localTwo.id; })[0];
+        ok('S57 管理员目录以本地完整线路为准，换乘快照不被公共同ID外线配色污染', exportedOne && exportedTwo &&
+          exportedTwo.color === '#7648B4' && exportedOne.relatedLines && exportedOne.relatedLines.some(function (line) {
+            return line.id === localTwo.id && line.nameEn === 'Local Seventy Two' && line.color === '#7648B4';
+          }));
+        responseMode = 'ok'; catalog = exported; await w.SignPanel.refreshServerLines(); choose('[data-route-source]', 'server');
+        choose('[data-route-library]', local.id);
+        ok('S57 导出的服务器目录可再次加载，往返保留线路和各站信息', exported &&
+          exported.lines.every(function (line) { return $('[data-route-library]').querySelector('option[value="' + line.id + '"]'); }) &&
+          $('[data-route-field="nameEn"]').value === local.nameEn && $$('[data-route-station]').length === local.stations.length &&
+          $('[data-route-station] [data-station-field="nameZh"]').value === local.stations[0].nameZh);
+        ok('S57 公共列表整个操作链未发出任何服务器写入请求', requests.every(function (request) { return request.method === 'GET'; }));
+      } finally {
+        w.fetch = realFetch; w.SignStorage.download = originalDownload;
+        if ($('.route-modal')) closeManager();
+      }
     }
 
     // ─── 主流程 ───────────────────────────────────────────
@@ -1506,6 +2749,23 @@
         await s38_mobileShell();
         await s39_mobileTallSignBand();
         await s40_mobileChipScrollKeeps();
+        await s41_crtLibrary();
+        await s42_primitivePresets();
+        await s43_aspectAndPresetReuse();
+        await s44_routeFilesAndLibrary();
+        await s45_fictionalStationContext();
+        await s46_exportSingleSign();
+        await s47_independentBoards();
+        await s48_routeEditorStaysOpen();
+        await s49_fictionalLineColors();
+        s50_aspectCardGroups();
+        s51_platformDirectionLayouts();
+        s52_transferPortalPresets();
+        s53_liveBackgroundContrast();
+        s54_namedSwatchesChooseLine();
+        await s55_fourSidedEntryEditor();
+        s56_contextSingleEntryAspect();
+        await s57_publicServerLines();
       }).then(function () {
         var passed = results.filter(function (r) { return r.pass; }).length;
         var total = results.length;

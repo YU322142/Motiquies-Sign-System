@@ -7,7 +7,8 @@
 零依赖纯前端：vanilla JS IIFE 模块 + 浏览器内置能力，无框架、无构建、无包管理。加载顺序（`index.html`）：
 
 ```
-core.js → icons.js → state.js → render.js → ui.js → presets.js
+core.js → icons.js → crt-symbols.js → crt-catalog.js → crt-render.js
+→ state.js → render.js → composition.js → routes.js → line-catalog.js → workspace.js → ui.js → presets.js
 → storage.js → exporters.js → panel.js → interact.js → main.js
 ```
 
@@ -22,11 +23,19 @@ core.js → icons.js → state.js → render.js → ui.js → presets.js
       → storage.scheduleAutosave  # 防抖 500ms 写 localStorage，beforeunload 兜底
 ```
 
-- 状态模型（state.js）：`SignState { widthMode, width, rowHeight, aspectLocked, backgroundColor, rows }`，`Row { id, elements }`，`Element { id, type, props }`。所有操作（增删行/元素、移动、属性合并、序列化/反序列化校验）都是纯函数。
+工作区管理多块独立标识牌，编辑器的 `App.state` 仍以当前牌面的 Sign 为入口，其他牌面作为工作区快照保存。顶部牌面卡片切换当前 Sign；添加组合预设建立新的独立牌面，普通「添加行」只修改当前 Sign。牌面宽度、行高与图片导出在当前 Sign 内计算，不能用同一 Sign 的多行代替工作区里的多块牌面。项目 JSON 保存整个工作区，线路和当前车站信息共享。
+
+`workspace.js` 的 `SignWorkspace` 使用 `sign.workspace = {activeId, boards}`。当前条目只保存 `{id, name}`，非当前条目保存 `{id, name, sign}`；快照移除自身 `workspace` 和共享的 `context`，避免递归或重复数据。`select` 先保存离开的牌面快照，再恢复目标牌面并附回共享上下文；`addPreset`、`addBlank`、`rename`、`remove` 都返回新状态。`list` 给界面返回包含当前完整 Sign 的只读牌面描述。
+
+项目导入由 `State.deserializeSign` 调用 `SignWorkspace.restore` 或 `migrate`。旧项目若有至少两行带明确 `templateId` 或 `route` 来源，会迁移成独立牌面；普通手工多行保持原样。工作区快照恢复时使用 `skipWorkspace` 防止重复迁移，自动保存与项目导出仍走原状态序列化入口。
+
+- 状态模型（state.js）：`SignState { widthMode, width, rowHeight, aspectLocked, backgroundColor, rows, context?, workspace? }`，`Row { id, elements, layout?, widthRatio?, referenceWidthRatio?, templateId?, backgroundColor?, route?, fourSided? }`，`Element { id, type, props }`。缺省为横向流式行；`layout: 'free'` 的行使用 `props.box {x,y,width,height}`，各值均为行高的比例。所有操作（增删行/元素、移动、属性合并、序列化/反序列化校验）都是纯函数。
+- 项目当前线路和车站保存在 `sign.context = {line, stationId}`；`State.setProjectContext` 规范化线路和站点 ID。`composition.contextOverrides` 按预设语义填入新牌的线路、站名、站号和方向；`contextProps` 为新加的基础线路／站名元素提供默认值。自建线路使用自定颜色，不自动套用重庆线路色。切站只改变以后添加的默认信息，既有元素不批量改写。
+- 线路图行另存 `row.route = {line, orientation}`，保留该图自己的完整线路快照；项目导入时经 `SignRoutes.normalizeLine` 复核。项目当前车站与某张线路图的本站可以不同。
 - `App.layout` 缓存最近一次 `layoutSign` 结果，供交互层（落点指示、gap 计算）与设置面板复用。
 - 相邻自动内边距：元素属性 `paddingAuto`（新建默认 true，旧存档缺省 false 钉住）。`applyPaddingAuto` 在 App.update 管线中幂等重算——paddingAuto 元素的左/右侧在同行同通道紧邻其他元素（空白占位不算）时取 0.1，否则 0.2；经 `updateElementProps` 写入左右内边距视为手动编辑并钉住（false）。space 恒为 false。
 - 选中态（`App.selection.elementId`）不属于 SignState，驱动右栏面板模式（元素属性 / 预设预览 / 标识牌设置）。
-- 编辑器偏好（`App.prefs`：`autoLineColor` 自动配色开关、`paletteCity` 选色板城市）同样不属于 SignState（不进项目 JSON），存于 localStorage `sign-prefs`（storage.js `loadPrefs`/`savePrefs`）。城市切换时所有打开中的颜色选择器经 panel.js 的 `paletteCityFns` 观察者同步重建色板；`Core.lineColorFor(号, 城市)` 与 `Core.citySwatches(城市)` 为纯函数，城市表见 core.js `CITY_PALETTES`。
+- 编辑器偏好（`App.prefs`：`autoLineColor` 自动配色开关、`paletteCity` 配色来源，含 `server` 服务器线路、`fictional` 我的线路及三个城市）同样不属于 SignState（不进项目 JSON），存于 localStorage `sign-prefs`（storage.js `loadPrefs`/`savePrefs`）。来源切换时所有打开中的颜色选择器经 panel.js 的 `paletteCityFns` 观察者同步重建色板；`Core.lineColorFor(号, 城市)` 与 `Core.citySwatches(城市)` 为纯函数，城市表见 core.js `CITY_PALETTES`。
 
 ## render.js：metrics / draw 双轨
 
@@ -47,8 +56,13 @@ core.js → icons.js → state.js → render.js → ui.js → presets.js
 
 ### 布局（layoutSign）
 
-- 动态宽度：`width = max(行高, 最宽行)`，所有元素左起流式。
-- 固定宽度：支持元素对齐（`props.elementAlign`，left/center/right）——三条独立通道：贴左流式、贴右从右缘流式、居中成组；通道间允许重叠（设计之内，用户调大牌宽解决）。
+- 动态宽度：带 `widthRatio` 的行按 `rowHeight × widthRatio` 取宽；普通流式行按元素宽度之和取宽，自由行缺省按定位盒右边界取宽。整牌采用最宽行，允许窄竖牌宽度小于行高。
+- 带参考比例的流式行：原生元素先统一测量，内容超出该行牌宽时整组等比缩小；富余宽度保留为牌面留白。`referenceWidthRatio` 保留参考值，`widthRatio` 保存当前值，不按长文本悄悄改变参考比例。
+- 普通流式行在固定宽度模式下支持元素对齐（`props.elementAlign`，left/center/right）——三条独立通道：贴左流式、贴右从右缘流式、居中成组；通道间允许重叠（设计之内，用户调大牌宽解决）。
+- 自由行：逐个按 `box` 定位，以同一缩放因子容纳元素，metrics 缓存在 slot 中，draw 直接消费；命中框仅覆盖该元素定位盒。自由行不应用相邻自动内边距。拖动改变定位盒，前后层级仍由 `elements` 顺序决定。
+- `State.setRowAspectRatio` 收敛比例到 `0.1～64`；自由行同步缩放元素的横坐标与盒宽，保留纵坐标和盒高，字形仍等比适配。当前比例、参考比例、预设 ID、底色、线路图快照和四方体逐排编辑数据随项目保存，行预设也经 `SignPresets.save(..., rowOptions)` 保留这些元数据。
+- 右栏独立「输出」区支持「导出此牌 SVG／PNG」：仅取当前行，以该行的 `widthRatio` 输出单张图片。标识牌设置中的原导出入口输出当前独立牌面的所有行，不拼接其他牌面；两者使用相同的内嵌字体与 SVG 光栅化管线。
+- `measureFragment(type, props, rowHeight, measure)` 为无 ID、无 DOM 的共用测量入口；`drawMeasuredElement` 仅消费其结果。内置预设与手工添加的同类型元素共享这套公式。
 
 ## 面板刷新：签名 + syncFns
 
@@ -98,6 +112,44 @@ core.js → icons.js → state.js → render.js → ui.js → presets.js
 HTTP 缓存坑：改完 js 后浏览器可能仍跑旧代码（症状：失败值与修复前逐字节相同）。在页面里 `fetch(url, {cache:'reload'})` 全部改动文件后 reload。
 
 ## 新增元素类型清单
+
+### 四个专区与基础元素组合预设
+
+左栏以横牌、竖牌、线路图、安全牌为四个专区，每区包含基础元素、组合预设与我的预设，共用左侧的线路管理入口。专区切换保持导航、搜索框和页签节点，更新卡片内容；移动端基础分类切换同样保留 chip 行及滚动位置。
+
+`crt-catalog.js` 中 `SignCRT.ALL` 提供当前 81 款预设。`LEGACY_ALL` 保留完整90款记录，即初次整理89款加实物补充的 `transfer-doorhead` 横梁；`REMOVED_IDS` 列出已移出的九款：两个时刻表、四个地图，以及 `entrance-identity`（出入口确认矩形附牌）、`gate-indicator`（自动检票机通行状态）、`fare-information`（票价表）。`get(id)`、`defaultFields` 和 `createProps` 仍按原 ID 恢复旧项目，不能为恢复兼容而重新显示已移除项目。来源见 [重庆标准覆盖记录](chongqing-standard.md)。
+
+`composition.js` 的 `materialize` 将预设转换为普通元素，新增操作不保留完整 `crt-sign` 元素。简单横牌直接组合原有的箭头、线路、双语文本与出口等类型；复杂牌面将几何指令转换为文字、图标、图形及原有元素，并附加 `props.box`。界面中的新增组合预设通过工作区入口建立独立牌面。`State.addTemplateRow(sign, preferredRowId, elements, options)` 是单块 Sign 内部的行操作，按定位盒识别流式或自由行，并从 `options` 接收参考比例、预设来源与线路图快照；不能直接用它把多个独立预设追加为当前牌面的多行。更新已有线路图可用 `replaceRowId` 明确替换目标行。
+
+新增 `plain-text`（单行文字：字体、粗细、颜色、字号比例）和 `shape`（矩形、圆形、线段、路径、多边形：安全几何属性、viewBox、填充及描边）。导入时校验这些属性与定位盒；合法数据应保持 JSON 往返一致。新增符号在 `crt-symbols.js`，通过原有 `icon` 类型选择，不修改生成物 `icons.js`。数字线路、出入口及出口的双语标签可编辑，仍走原有排版。
+
+绑定背景的文字或图标以 `contrastSourceId` 指向同一行的背景 `shape`。更新其 `fill` 时，状态函数自动重算 `autoContrast: true` 的文字／图标颜色；手动改色设置 `autoContrast: false`，右栏「随背景自动黑白」可恢复。项目导入、复制和我的预设重新添加时重映射背景 ID，避免关联到另一块牌。门套数字色块通过编译指令的 `contrastKey`／`contrastOf` 建立关联，元数据不写入 SVG。
+
+`crt-render.js` 的 metrics 指令是复杂预设转换的中间表示，也承担旧 `crt-sign` 存档的兼容绘制；draw 只消费 metrics，不再测量。旧整牌可在右栏转换为基础元素：单元素行原位转换，混合行中的复杂整牌另起自由行，保留其余原有元素。行预设保存所有基础元素及定位盒，预览和拖入均恢复自由排版。来源与范围见 [重庆标准覆盖记录](chongqing-standard.md)。
+
+### 四方体逐排编辑
+
+四方体导向仍由普通基础元素组成，`row.fourSided = {entries, props, referenceRowRatio}` 另存编辑数据。`entries` 限制 1～12 排，各排保存稳定 `id` 及 `leftZh/leftEn/line/lineEn/rightZh/rightEn`。右栏「编辑各排内容与顺序」支持实时改字、增删和上下排序；状态变更经 `updateFourSidedEntry`、`addFourSidedEntry`、`removeFourSidedEntry`、`moveFourSidedEntry` 纯函数重新组合，并显式接收 measurer。
+
+参考比例按 `referenceRowRatio / 排数` 计算，重排时保留 `widthRatio / referenceWidthRatio` 的手调倍率，再收敛到合法范围。同一排同一用途的基础元素通过 `fourSidedEntryId/fourSidedRole` 复用 ID；独立修改的方向文字和线路回写排数据。项目导入和 `SignPresets.save(..., rowOptions)` 保留 `fourSided`、当前及参考比例，预设复用后仍可逐排编辑，也可继续独立编辑基础元素。
+
+### 自建线路与独立线路文件
+
+`routes.js` 为无 DOM 的线路模型。`Line {id, nameZh, nameEn, color, stations, currentStationId, direction}`；`Station {id, nameZh, nameEn, code, transfers}`，换乘为可编辑字符串，运行方向为 `forward|backward`。`createLine`、`patchLine`、`addStation`、`updateStation`、`removeStation`、`moveStation` 均返回副本；站点排序通过 ID 保持本站，删除本站后选相邻站。默认站名为通用占位，不填真实重庆车站。
+
+`panel.js` 的线路色条／色块选择器使用 `onLineSelect`，由 `Core.uniqueLineForColor(color, candidates)` 判断颜色是否唯一对应一条线路。数字线路只填规范的 1～2 位编号及颜色；文本线路按 `nameSink` 填中文名、英文名及色块颜色。通用色、HEX 手输和前景色控件只改色；同色多线不猜测身份，保留文字并提示单独选择线路。各条数字线路通过 `live()` 和值同步独立更新，不以可编辑值重建面板。
+
+独立文件为 `{format:'railway-line', version:1, line}`。`serialize`／`deserialize` 与项目 JSON 分开；导入严格核对格式、版本、字段类型、颜色、唯一站点 ID 及本站引用。宽容入口 `normalizeLine` 供项目恢复使用，不能替代线路文件的严格验证。`list`／`save`／`remove` 使用本地库 `railway-line-library-v1`，可注入 Storage 供 Node 测试。
+
+`materialize(line, orientation, measure)` 返回 `{elements, widthRatio, route:{line, orientation}}`，其中 `orientation` 为 `horizontal|vertical`。所有元素均可单独编辑；默认高亮本站，已过区段变灰，箭头随运行方向改变。最多 256 站，参考比例随站数变化并收敛至 `0.1～64`；密集站点按站距缩小，过小的竖向双语改为同一行分栏，避免墨区取整导致覆盖。`test/routes.test.mjs` 覆盖不可变操作、独立文件、线路库、图形位置、密集站点及线路放入项目后的完整往返。使用步骤见 [虚构线路入门](fictional-lines.md)。
+
+### 服务器公共线路列表
+
+`line-catalog.js` 的 `SignLineCatalog` 处理静态 `{format:'railway-line-catalog', version:1, updatedAt?, lines}`，其中每项为完整的 `SignRoutes` 线路对象。`parse` 默认跳过损坏单条并返回 `warnings`，顶层格式错误拒绝；`serialize` 严格核对全部线路及唯一 ID。模块不读写本地 Storage，已有 `relatedLines` 快照随序列化保留。
+
+`load({url?, baseURL?, fetch?, timeoutMs?})` 默认相对页面请求 `data/lines.json`，每次使用 `cache:'no-store'`，默认10秒超时。公共列表在界面运行态管理，不自动写入本地线路库；访客明确另存本地后才建立个人副本。管理员由编辑器导出完整列表，再通过网站部署权限替换静态文件，不设置客户端管理密码。文件 schema 与发布步骤见[服务器线路管理](server-lines.md)。
+
+### 通用扩展步骤
 
 1. `state.js`：`ELEMENT_TYPES` 加类型；`DEFAULT_PROPS` 加默认 props（含 `elementAlign`、`padding`）；**必须在 `sanitizeElement` 为新属性补校验**——反序列化是外部数据（导入 JSON / 存档）进入渲染层的唯一闸门，凡渲染层假定过的形状（数组、数值、枚举、字符串）都要收敛，否则一份手改 JSON 就能让整牌渲染崩溃（历史教训见 [code-review-2026-09.md](code-review-2026-09.md) P1-1）。校验对合法值必须是恒等变换，保证 serialize → deserialize 往返不变。
 2. `render.js`：metrics 函数 + draw 函数，注册进 `METRICS_FNS` / `DRAW_FNS`。

@@ -87,8 +87,8 @@
   /** 空状态提示文案按断点切换（桌面拖放 / 移动点击） */
   function applyEmptyHintText() {
     document.getElementById('empty-hint').textContent = App.isMobileView()
-      ? '从顶部卡片点击添加元素开始编辑'
-      : '从左侧拖放元素到此处开始编辑';
+      ? '点击上方预设开始；制作虚构线路可先点“线路管理”'
+      : '从左侧点击或拖入预设；制作虚构线路可先点“线路管理”';
   }
 
   /**
@@ -191,6 +191,8 @@
         SignPanel.buildPalette();
         App.renderAll();
         hideLoading();
+        // 公共线路独立加载；网络不可用也不阻塞本地编辑。
+        if (SignPanel.refreshServerLines) SignPanel.refreshServerLines();
         applyEmptyHintText();
         watchBreakpoint();
         syncToastOffset();

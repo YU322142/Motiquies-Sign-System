@@ -24,8 +24,14 @@
 
   <script src="js/core.js"></script>
   <script src="js/icons.js"></script>
+  <script src="js/crt-symbols.js"></script>
+  <script src="js/crt-catalog.js"></script>
+  <script src="js/crt-render.js"></script>
   <script src="js/state.js"></script>
   <script src="js/render.js"></script>
+  <script src="js/composition.js"></script>
+  <script src="js/routes.js"></script>
+  <script src="js/workspace.js"></script>
   <script src="js/ui.js"></script>
   <script src="js/presets.js"></script>
   <script src="js/storage.js"></script>
@@ -640,7 +646,9 @@
       setCity('shanghai');
       assertEqual(swatchCount(), 34, '上海 = 23 线路 + 7 附加 + 4 通用');
       assertEqual(picker.querySelector('.cp-city-select').value, 'shanghai', '下拉回显当前城市');
-      assertEqual(picker.querySelectorAll('.cp-city-select option').length, 3, '下拉列出全部城市');
+      assertEqual(picker.querySelectorAll('.cp-city-select option').length, 5, '下拉列出三个城市、我的线路与服务器线路');
+      assert(!!picker.querySelector('.cp-city-select option[value="fictional"]'), '可选择我的线路色板');
+      assert(!!picker.querySelector('.cp-city-select option[value="server"]'), '可选择服务器线路色板');
 
       setCity('chongqing');
       assertEqual(swatchCount(), 29, '重庆 = 24 线路去重 + 环线 + 4 通用');
@@ -686,6 +694,40 @@
         img.onerror = function () { reject(new Error('SVG 光栅化失败')); };
         img.src = url;
       });
+    });
+
+    test('重庆矩形标识：全部模板生成可导出的自包含SVG', function () {
+      SignCRT.ALL.forEach(function (t) {
+        var el = SignState.createElement('crt-sign', { templateId: t.id });
+        var svg = SignRender.renderElementStandalone(el, 300, measure).node;
+        assert(svg.querySelectorAll('rect').length > 0, t.id + ' 缺少矩形牌面');
+        assert(svg.querySelectorAll('text').length > 0, t.id + ' 缺少可编辑文字');
+        assert(!/NaN|Infinity/.test(svg.outerHTML), t.id + ' 包含非法坐标');
+        assert(!svg.querySelector('image, script, foreignObject'), t.id + ' 应只含自包含矢量');
+      });
+    });
+
+    test('重庆矩形标识：用户输入作为文字转义，导出保留字体', function () {
+      var state = SignState.createSign();
+      state.widthMode = 'dynamic';
+      state.rows[0].elements = [SignState.createElement('crt-sign', {
+        fields: { title: '<script>alert(1)<' + '/script> & 重庆', subtitle: 'Station' },
+      })];
+      var str = SignExporters.buildExportSVGString(state, measure, {});
+      var doc = new DOMParser().parseFromString(str, 'image/svg+xml');
+      assert(!doc.querySelector('parsererror, script'), '输入不能成为SVG节点');
+      assert(doc.documentElement.textContent.indexOf('<script>') !== -1, '用户输入保持原文');
+      assert(SignExporters.collectUsedFonts(state).zh700, '导出收集中文粗体');
+    });
+
+    test('重庆矩形标识：极窄横幅在独立矩形视口内裁切，不侵占相邻元素', function () {
+      var el = SignState.createElement('crt-sign', { templateId: 'entrance-lintel', widthRatio: 0.1 });
+      var rendered = SignRender.renderElement(el, 300, measure, { clean: true }).node;
+      var viewport = rendered.firstElementChild;
+      assertEqual(viewport.tagName.toLowerCase(), 'svg');
+      assertEqual(viewport.getAttribute('overflow'), 'hidden');
+      assertEqual(Number(viewport.getAttribute('width')), 30);
+      assertEqual(Number(viewport.getAttribute('height')), 300);
     });
 
     // ─── 运行器 ────────────────────────────────────────

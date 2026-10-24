@@ -25,6 +25,7 @@
 
   var MIME_NEW = 'application/x-sign-new';
   var MIME_PRESET = 'application/x-sign-preset';
+  var MIME_TEMPLATE = 'application/x-sign-template';
 
   function init() {
     overlay = document.getElementById('sign-overlay');
@@ -303,6 +304,7 @@
       startX: ev.clientX,
       startY: ev.clientY,
       dx: 0, dy: 0,
+      startPoint: toSignPoint(ev),
     };
     document.addEventListener('pointermove', onElementDragMove);
     document.addEventListener('pointerup', onElementDragEnd);
@@ -322,7 +324,7 @@
     if (!slot) { elemDrag = null; return; }
 
     var viewBoxW = slot.width;
-    var viewBoxH = App.state.rowHeight;
+    var viewBoxH = slot.height || App.state.rowHeight;
 
     var ghostSvg = document.createElementNS(Core.SVG_NS, 'svg');
     ghostSvg.setAttribute('viewBox', '0 0 ' + viewBoxW + ' ' + viewBoxH);
@@ -368,6 +370,34 @@
     var rowId = App.state.rows[ri].id;
     // 不能把元素放进…（任何行都可以，包括源行）
     var dragFound = State.findElement(App.state, elemDrag.elementId);
+    var sourceRow = dragFound && App.state.rows[dragFound.rowIndex];
+    var targetRow = App.state.rows[ri];
+    if (sourceRow && (sourceRow.layout === 'free' || targetRow.layout === 'free')) {
+      elIndicator.style.display = 'none';
+      var h = App.state.rowHeight;
+      var box = dragFound.element.props.box;
+      var destination = targetRow.layout === 'free' ? targetRow : sourceRow;
+      var destinationIndex = App.state.rows.indexOf(destination);
+      var rowWidth = destination.widthRatio || App.layout.rows[destinationIndex].contentWidth / h;
+      if (!box) {
+        var natural = SignRender.computeElementWidth(dragFound.element, h, App.measure) / h;
+        box = { x: pt.x / h, y: (pt.y - destinationIndex * h) / h,
+          width: Math.min(rowWidth, natural * 0.2), height: 0.2 };
+      } else if (destination.id === sourceRow.id) {
+        box = Object.assign({}, box, {
+          x: box.x + (pt.x - elemDrag.startPoint.x) / h,
+          y: box.y + (pt.y - elemDrag.startPoint.y) / h,
+        });
+      } else {
+        box = Object.assign({}, box, { x: pt.x / h - box.width / 2,
+          y: (pt.y - destinationIndex * h) / h - box.height / 2 });
+      }
+      box.x = Core.clamp(box.x, 0, Math.max(0, rowWidth - box.width));
+      box.y = Core.clamp(box.y, 0, Math.max(0, 1 - box.height));
+      rowBandByIndex(destinationIndex).classList.add('drop-ok');
+      elemDrag.target = { rowId: destination.id, box: box, gap: destination.elements.length };
+      return;
+    }
     var dragAlign = dragFound ? dragFound.element.props.elementAlign : null;
     // 拖入空通道时指示线需按被拖元素宽度定位（居中通道）
     var dragWidth = 0;
@@ -410,8 +440,14 @@
     // 避免残留吞掉用户下一次点击选中。
     setTimeout(function () { suppressClick = false; }, 0);
 
-    if (session.target) {
+    if (session.target && ev.type !== 'pointercancel') {
       App.update(function (st) {
+        if (session.target.box) {
+          var current = State.findElement(st, session.elementId);
+          var moved = current.rowId === session.target.rowId ? st :
+            State.moveElement(st, session.elementId, session.target.rowId, session.target.gap);
+          return State.updateElementProps(moved, session.elementId, { box: session.target.box });
+        }
         return State.moveElement(st, session.elementId, session.target.rowId, session.target.gap);
       });
     }
@@ -499,12 +535,13 @@
   function readDragKind(ev) {
     var types = ev.dataTransfer.types;
     if (Array.prototype.indexOf.call(types, MIME_PRESET) !== -1) return 'preset';
+    if (Array.prototype.indexOf.call(types, MIME_TEMPLATE) !== -1) return 'template';
     if (Array.prototype.indexOf.call(types, MIME_NEW) !== -1) return 'new';
     return null;
   }
 
   function readDragPayload(ev, kind) {
-    var mime = kind === 'preset' ? MIME_PRESET : MIME_NEW;
+    var mime = kind === 'preset' ? MIME_PRESET : kind === 'template' ? MIME_TEMPLATE : MIME_NEW;
     var raw = ev.dataTransfer.getData(mime) || ev.dataTransfer.getData('text/plain');
     try { return JSON.parse(raw); } catch (e) { return null; }
   }
@@ -518,27 +555,31 @@
     var pt = toSignPoint(ev);
     clearRowHighlights();
     elIndicator.style.display = 'none';
+    rowIndicator.style.display = 'none';
     if (!pt) return;
     var ri = rowIndexAt(pt.y);
     if (ri === -1) return;
     var band = rowBandByIndex(ri);
     var row = App.state.rows[ri];
 
-    if (kind === 'new') {
+    if (kind === 'template' || kind === 'preset') {
       band.classList.add('drop-ok');
+      paletteDropTarget = { kind: kind, rowIndex: ri };
+    } else if (kind === 'new') {
+      band.classList.add('drop-ok');
+      if (row.layout === 'free') {
+        var ratio = row.widthRatio || App.layout.rows[ri].contentWidth / App.state.rowHeight;
+        var bh = 0.15, bw = Math.min(0.5, ratio);
+        paletteDropTarget = { kind: kind, rowIndex: ri, gap: row.elements.length, box: {
+          x: Core.clamp(pt.x / App.state.rowHeight, 0, Math.max(0, ratio - bw)),
+          y: Core.clamp((pt.y - ri * App.state.rowHeight) / App.state.rowHeight, 0, 1 - bh), width: bw, height: bh,
+        } };
+        return;
+      }
       // 新元素来自左栏默认属性（elementAlign: left），按左通道计算落点
       var t = dropTargetAt(ri, pt.x, 'left');
       showElementIndicator(ri, t.indicatorX);
       paletteDropTarget = { kind: kind, rowIndex: ri, gap: t.gap };
-    } else {
-      // 预设仅可放入空行
-      if (row.elements.length === 0) {
-        band.classList.add('drop-ok');
-        paletteDropTarget = { kind: kind, rowIndex: ri };
-      } else {
-        band.classList.add('drop-invalid');
-        paletteDropTarget = null;
-      }
     }
   }
 
@@ -548,6 +589,7 @@
     if (!overlay.contains(ev.relatedTarget) && ev.relatedTarget !== overlay) {
       clearRowHighlights();
       elIndicator.style.display = 'none';
+      rowIndicator.style.display = 'none';
       paletteDropTarget = null;
     }
   }
@@ -557,34 +599,58 @@
     var kind = readDragKind(ev);
     clearRowHighlights();
     elIndicator.style.display = 'none';
+    rowIndicator.style.display = 'none';
     if (!kind || !paletteDropTarget) return;
     var payload = readDragPayload(ev, kind);
     var target = paletteDropTarget;
     paletteDropTarget = null;
     if (!payload) return;
 
-    if (target.kind === 'new' && payload.type) {
+    if (payload.kind === 'template' && typeof payload.templateId === 'string') {
+      var template = global.SignCRT.get(payload.templateId);
+      var overrides = global.SignComposition.contextOverrides(template, App.state.context,
+        global.SignPanel.routeLinesSnapshot ? global.SignPanel.routeLinesSnapshot() : global.SignRoutes.list());
+      var fourSided = template.id === 'four-sided-guide' ? State.createFourSided(overrides) : null;
+      if (fourSided) overrides = Object.assign({}, overrides, { fourSidedEntries: fourSided.entries });
+      var templateElements = global.SignComposition.materialize(payload.templateId, overrides, App.measure);
+      App.update(function (st) {
+        return global.SignWorkspace.addPreset(st, templateElements,
+          { name: template.name, templateId: template.id,
+            widthRatio: fourSided ? fourSided.referenceRowRatio / fourSided.entries.length : template.width / template.height, backgroundColor: overrides.backgroundColor,
+            fourSided: fourSided || undefined });
+      });
+      if (!App.state.context) {
+        App.prefs.paletteCity = 'chongqing';
+        SignStorage.savePrefs(App.prefs);
+      }
+      var primary = templateElements.find(function (element) { return ['bilingual-text', 'plain-text', 'number-line', 'text-line'].indexOf(element.type) !== -1; });
+      App.select((primary || templateElements[0]).id);
+      SignUI.toast('已新建独立牌面', 'success');
+    } else if (target.kind === 'new' && payload.type) {
+      var contentProps = global.SignComposition.contextProps(payload.type, payload.props, App.state.context);
+      var created = State.createElement(payload.type, Object.assign({}, contentProps,
+        target.box ? { box: target.box, paddingAuto: false } : {}));
       App.update(function (st) {
         var rowId = st.rows[target.rowIndex].id;
-        return State.addElement(st, rowId, State.createElement(payload.type, payload.props), target.gap);
+        var next = State.addElement(st, rowId, created, target.gap);
+        if (created.type === 'crt-sign' && st.rows.every(function (r) { return r.elements.length === 0; })) {
+          next = State.updateSignSettings(next, { widthMode: 'dynamic' });
+        }
+        return next;
       });
+      if (created.type === 'crt-sign') App.select(created.id);
     } else if (target.kind === 'preset' && payload.id) {
-      var row = App.state.rows[target.rowIndex];
-      if (row.elements.length !== 0) {
-        SignUI.toast('预设只能放入空行', 'error');
-        return;
-      }
       var elements = SignPresets.materialize(payload.id);
       if (!elements || elements.length === 0) {
         SignUI.toast('预设内容为空', 'error');
         return;
       }
       App.update(function (st) {
-        var rows = st.rows.map(function (r, i) {
-          return i === target.rowIndex ? Object.assign({}, r, { elements: elements }) : r;
-        });
-        return Object.assign({}, st, { rows: rows });
+        var preset = SignPresets.get(payload.id);
+        return global.SignWorkspace.addPreset(st, elements, Object.assign({}, preset.row, { name: preset.name }));
       });
+      var selected = elements.find(function (element) { return ['bilingual-text', 'plain-text', 'number-line', 'text-line'].indexOf(element.type) !== -1; });
+      App.select((selected || elements[0]).id);
       SignUI.toast('已应用预设', 'success');
     }
   }
@@ -779,7 +845,7 @@
     SignUI.promptDialog('为这一行元素起个名字：', '保存为预设', '', '如：站台方向牌').then(function (name) {
       if (name === null) return;
       if (!name) { SignUI.toast('预设名称不能为空', 'error'); return; }
-      SignPresets.save(name, row.elements);
+      SignPresets.save(name, row.elements, row);
       SignUI.toast('预设「' + name + '」已保存', 'success');
     });
   }
@@ -793,5 +859,6 @@
     setCanvasZoom: setCanvasZoom,
     MIME_NEW: MIME_NEW,
     MIME_PRESET: MIME_PRESET,
+    MIME_TEMPLATE: MIME_TEMPLATE,
   };
 })(typeof window !== 'undefined' ? window : globalThis);

@@ -3,7 +3,7 @@
 <head>
   <meta charset="UTF-8">
   <meta name="viewport" content="width=device-width, initial-scale=1.0">
-  <title>导向标识生成器</title>
+  <title>Motiquies Sign System · 轨道交通标识编辑器</title>
   <link rel="stylesheet" href="style.css">
 </head>
 <body>
@@ -30,6 +30,7 @@
 
     <!-- ══ 中栏：SVG 编辑区 ══ -->
     <main id="center-panel">
+      <div id="board-switcher" aria-label="牌面切换"></div>
       <div id="canvas-scroll">
         <div id="canvas-area">
           <div id="canvas-wrap">
@@ -37,13 +38,18 @@
             <div id="sign-overlay">
               <!-- interact.js 填充：行手柄/行按钮/拖放指示器 -->
             </div>
-            <div id="empty-hint" hidden>从左侧拖放元素到此处开始编辑</div>
+            <div id="empty-hint" hidden>从左侧点击或拖入预设；制作虚构线路可先点“线路管理”</div>
           </div>
           <!-- 移动端行管理条：interact.js 填充（行控件外置，不与牌面元素叠加） -->
           <div id="row-strip"></div>
           <button id="add-row-btn" title="在底部添加新行">＋ 添加行</button>
         </div>
       </div>
+      <footer id="app-footer" aria-label="项目信息">
+        <span>Motiquies Sign System</span>
+        <span aria-hidden="true">·</span>
+        <a href="https://github.com/endcreeper861/JR-Guidance-Sign-Web-Editor" target="_blank" rel="noopener noreferrer" aria-label="原项目 JR-Guidance-Sign-Web-Editor（在新标签页打开）">原项目 ↗</a>
+      </footer>
       <!-- 画布缩放徽标：仅移动布局显示，interact.js 更新倍率并接线复位 -->
       <button id="zoom-badge" title="当前缩放，点按复位">100%</button>
     </main>
@@ -71,8 +77,15 @@
 
   <script src="js/core.js"></script>
   <script src="js/icons.js"></script>
+  <script src="js/crt-symbols.js"></script>
+  <script src="js/crt-catalog.js"></script>
+  <script src="js/crt-render.js"></script>
   <script src="js/state.js"></script>
   <script src="js/render.js"></script>
+  <script src="js/composition.js"></script>
+  <script src="js/routes.js"></script>
+  <script src="js/line-catalog.js"></script>
+  <script src="js/workspace.js"></script>
   <script src="js/ui.js"></script>
   <script src="js/presets.js"></script>
   <script src="js/storage.js"></script>

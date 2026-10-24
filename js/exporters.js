@@ -57,6 +57,16 @@
       row.elements.forEach(function (el) {
         var p = el.props;
         switch (el.type) {
+          case 'plain-text':
+            var key = p.font === 'num' ? 'num' : p.font === 'en' ? 'en' : 'zh';
+            used[key + (p.bold ? '700' : '400')] = true;
+            // Mixed-language single-line text can fall back to the CJK font face.
+            if (/[\u3400-\u9FFF]/.test(p.text || '')) used['zh' + (p.bold ? '700' : '400')] = true;
+            break;
+          case 'crt-sign':
+            anyZh(); anyEn(); anyNum();
+            used.zh700 = true; used.en700 = true; used.num700 = true;
+            break;
           case 'bilingual-text':
             if (p.textZh) anyZh();
             if (p.textEn) anyEn();

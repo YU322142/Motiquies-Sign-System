@@ -1,0 +1,17 @@
+Motiquies Sign System
+
+Derived from JR-Guidance-Sign-Web-Editor by its upstream contributors:
+https://github.com/endcreeper861/JR-Guidance-Sign-Web-Editor
+
+The upstream Apache License, Version 2.0 is retained in LICENSE.
+The original source history and attribution notices are preserved.
+
+This version adds Chongqing rectangular sign presets, editable primitive
+compositions, fictional railway lines and line files, multiple sign boards,
+per-sign proportions and export controls, transfer doorway signs, editable
+multi-row direction signs, line palette integration, and interaction fixes.
+It also adds a static public server-line catalog managed through data/lines.json.
+
+Reference-standard layouts are implemented as editable examples. Fonts and
+icons inherited from upstream retain their original attribution and terms;
+the project license does not override any applicable third-party terms.

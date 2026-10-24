@@ -253,6 +253,12 @@
     for (var i = 0; i < def.lines.length; i++) {
       if (def.lines[i].line === s) return def.lines[i];
     }
+    for (var j = 0; j < def.extras.length; j++) {
+      var extra = def.extras[j];
+      if (extra.name === s || extra.name.replace(/线$/, '') === s) {
+        return { line: s, bg: extra.bg };
+      }
+    }
     return null;
   }
 
@@ -274,6 +280,20 @@
     def.extras.forEach(function (c) { push(c.name, c.bg); });
     UNIVERSAL_SWATCHES.forEach(function (c) { push(c.name, c.bg); });
     return out;
+  }
+
+  /** 颜色可能对应多条线路；只有身份唯一时才能把选色解释为选线。 */
+  function uniqueLineForColor(color, candidates) {
+    var bg = normalizeHex(color);
+    if (!bg || !Array.isArray(candidates)) return null;
+    var matches = new Map();
+    candidates.forEach(function (candidate) {
+      if (!candidate || typeof candidate.line !== 'string' || !candidate.line.trim() ||
+          normalizeHex(candidate.bg) !== bg) return;
+      var key = candidate.id || JSON.stringify([candidate.line, candidate.name || '', candidate.nameEn || '']);
+      if (!matches.has(key)) matches.set(key, candidate);
+    });
+    return matches.size === 1 ? matches.values().next().value : null;
   }
 
   // ─── 文本测量 ──────────────────────────────────────────────
@@ -353,6 +373,7 @@
     contrastTextColor: contrastTextColor,
     lineColorFor: lineColorFor,
     citySwatches: citySwatches,
+    uniqueLineForColor: uniqueLineForColor,
     createCanvasMeasurer: createCanvasMeasurer,
   };
 })(typeof window !== 'undefined' ? window : globalThis);

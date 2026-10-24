@@ -30,7 +30,18 @@
 
     /** 状态变更入口：pureFn(sign) → 新 sign */
     update: function (pureFn) {
+      var beforeBoardId = App.state && (App.state.workspace ? App.state.workspace.activeId : App.state.rows[0].id);
       App.state = pureFn(App.state);
+      var afterBoardId = App.state.workspace ? App.state.workspace.activeId : App.state.rows[0].id;
+      if (beforeBoardId !== afterBoardId) {
+        App.selection.elementId = null; App.presetPreviewId = null; App.canvasZoom = 1;
+        var scroll = document.getElementById('canvas-scroll');
+        if (scroll) { scroll.scrollLeft = 0; scroll.scrollTop = 0; }
+        var badge = document.getElementById('zoom-badge');
+        if (badge) badge.textContent = '100%';
+      } else if (App.selection.elementId && !SignState.findElement(App.state, App.selection.elementId)) {
+        App.selection.elementId = null;
+      }
       if (global.SignState && SignState.applyPaddingAuto) {
         // 相邻自动内边距：每次变更后按相邻关系重算自动侧（幂等，随当次更新落盘/撤销）
         App.state = SignState.applyPaddingAuto(App.state);
@@ -65,9 +76,26 @@
       var wrap = document.getElementById('canvas-wrap');
       var overlay = document.getElementById('sign-overlay');
       if (!svg || !wrap) return;
+      var workspaceMode = !!App.state.workspace;
+      if (!workspaceMode) wrap.style.width = '';
       var avail = wrap.clientWidth;
+      if (workspaceMode) {
+        var area = document.getElementById('canvas-area');
+        avail = Math.min(1600, area ? area.clientWidth : avail);
+      }
       if (avail > 0) {
-        svg.style.width = Math.min(avail, App.layout.width) * (App.canvasZoom || 1) + 'px';
+        var displayWidth = Math.min(avail, App.layout.width);
+        if (workspaceMode) {
+          var complete = App.state.rows.length === 1 &&
+            (App.state.rows[0].templateId || App.state.rows[0].route || App.state.rows[0].layout === 'free');
+          if (complete) {
+            var scroll = document.getElementById('canvas-scroll');
+            var maxHeight = Math.max(120, (scroll ? scroll.clientHeight : 600) - 90);
+            displayWidth = App.layout.width * Math.min(2, avail / App.layout.width, maxHeight / App.layout.height);
+          }
+          wrap.style.width = displayWidth * (App.canvasZoom || 1) + 'px';
+        }
+        svg.style.width = displayWidth * (App.canvasZoom || 1) + 'px';
         if (overlay) {
           overlay.style.width = svg.style.width;
           overlay.style.height = svg.getBoundingClientRect().height + 'px';
